@@ -308,8 +308,15 @@ uint32_t MspTelemetry::resolve_custom_mode() const {
   return PLANE_ACRO;
 }
 
+void MspTelemetry::set_forced_arm(int v, uint64_t now_ms) {
+  if (v == forced_arm_) return;
+  forced_arm_ = v;
+  if (st_.have_reply) apply_mode_flags(now_ms);
+}
+
 void MspTelemetry::apply_mode_flags(uint64_t now_ms) {
   if (!armed_known_) st_.armed = box_active(BOX_ARM);
+  if (forced_arm_ >= 0) st_.armed = forced_arm_ != 0;
   const bool failsafe = box_active(BOX_FAILSAFE);
   const uint32_t mode = resolve_custom_mode();
   const bool changed = mode != st_.custom_mode || failsafe != st_.failsafe || st_.armed != hb_armed_;

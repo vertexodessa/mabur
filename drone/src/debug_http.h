@@ -12,9 +12,13 @@ namespace mabur { struct OvOverride; }
 // routes below is understood, and everything else collapses to BAD so the
 // caller can 404 it without special-casing.
 struct DebugReq {
-  enum { SNAPSHOT, STATS, SET, BAD } kind;
+  enum { SNAPSHOT, STATS, SET, SIM_SET, SIM_GET, BAD } kind;
   std::string key;
   long val = 0;
+  // SIM_SET (POST /sim?<key>=<value|off>[&ttl=<s>], sim_overrides.h):
+  // clear = "off"; ttl in seconds, default SimOverrides::kDefaultTtlS.
+  bool clear = false;
+  long ttl = 60;
 };
 
 // Pure: parses the HTTP request line only (e.g. "GET /venc HTTP/1.0"),
