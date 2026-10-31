@@ -14,26 +14,43 @@ constexpr uint8_t MSP_DP_DRAW_STRING = 3;
 constexpr uint8_t MSP_DP_DRAW_SCREEN = 4;
 constexpr uint8_t MSP_DP_SET_OPTIONS = 5;
 
-// One decoded MSP v1 message.
+// One decoded MSP message. v1 ($M): cmd is the byte command, cmd16 == cmd.
+// v2 native ($X, 2026-09-18 for INAV's MSP2_INAV_STATUS): v2 is set, cmd16 is
+// the 16-bit command and cmd is 0, so v1-only consumers (the DisplayPort
+// screen, which matches cmd == 182) never see a v2 message as theirs.
 struct MspMessage {
   uint8_t cmd = 0;
   std::vector<uint8_t> payload;
+  bool v2 = false;
+  uint16_t cmd16 = 0;
 };
 
 // Appends one MSP v1 frame ($M< size cmd payload xor-checksum) to `out`.
 void msp_append_message(std::vector<uint8_t>& out, uint8_t cmd,
                         const uint8_t* payload, size_t n);
+// Appends one MSP v2 native frame ($X< flag=0, cmd u16, size u16, payload,
+// crc8 DVB-S2 over flag..payload) to `out`.
+void msp_append_message_v2(std::vector<uint8_t>& out, uint16_t cmd,
+                           const uint8_t* payload, size_t n);
+uint8_t msp_crc8_dvb_s2(uint8_t crc, uint8_t b);
 
-// Streaming MSP v1 parser. Byte-for-byte port of msposd's msp_process_data:
-// resyncs on garbage, drops checksum-failures. Feed arbitrary spans.
+// Streaming MSP parser. The v1 path is a byte-for-byte port of msposd's
+// msp_process_data: resyncs on garbage, drops checksum failures. v2 native
+// frames ($X, INAV) are parsed alongside; v2-over-v1 (a v1 frame with
+// command 255 wrapping a v2 one) is not, nothing here requests it. Feed
+// arbitrary spans.
 class MspParser {
  public:
   std::vector<MspMessage> feed(const uint8_t* p, size_t n);
 
  private:
-  enum State { IDLE, VERSION, DIRECTION, SIZE, CMD, PAYLOAD, CHECKSUM };
+  enum State {
+    IDLE, VERSION, DIRECTION, SIZE, CMD, PAYLOAD, CHECKSUM,
+    V2_DIRECTION, V2_FLAG, V2_CMD_LO, V2_CMD_HI, V2_SIZE_LO, V2_SIZE_HI, V2_PAYLOAD, V2_CRC
+  };
   State state_ = IDLE;
   uint8_t size_ = 0, cmd_ = 0, checksum_ = 0, buf_ptr_ = 0;
+  uint16_t cmd16_ = 0, size16_ = 0, ptr16_ = 0;
   std::vector<uint8_t> payload_;
 };
 

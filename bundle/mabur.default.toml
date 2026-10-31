@@ -96,6 +96,8 @@ update_rate_hz = 3              # OSD updates per second sent to the ground stat
 symbol_size    = 1312           # bytes per OSD packet
 window         = 16             # error-correction window, in packets
 overhead       = 1.0            # extra repair data (1.0 = +100 %)
+snapshots      = true           # send the OSD screen (DisplayPort) to the ground station
+telemetry      = false          # poll the FC for attitude/GPS/battery/mode and send it as MAVLink
 
 [low_power]
 # While disarmed: lower bitrate and frame rate to keep the VTX cool.
