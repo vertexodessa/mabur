@@ -76,6 +76,7 @@
 #include "mabur/uep_encoder.h"
 #include "msp_serial.h"
 #include "fc_mav_queue.h"
+#include "sim_overrides.h"
 #include "power_plan.h"
 #include "power_tables.h"
 #include "probe_source.h"
@@ -1902,9 +1903,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       // Without snapshots there is no MspSource to parse for the hook.
       mabur::MspParser arm_parser;
       auto on_arm_msg = [&](const mabur::MspMessage& msg) {
+        if (mabur::sim().get("arm", mabur::sim_now_ms())) return;  // /sim?arm= reports instead
         if (auto armed = mabur::msp_status_armed(msg))
           agent.note_arm_state(*armed, now_steady_ms());
       };
+      uint64_t sim_arm_report_ms = 0;
       // Installed whether or not low power is on: low_power.enable is a live
       // knob, and the poll below is what gates the replies.
       if (src && !tel) src->set_message_hook(on_arm_msg);
@@ -1955,6 +1958,14 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
           continue;
         }
 
+        // Bench simulation (/sim?arm=, sim_overrides.h): while set, it is the
+        // arm report, at the poll's cadence, FC or no FC.
+        const std::optional<long> sim_arm = mabur::sim().get("arm", mabur::sim_now_ms());
+        if (sim_arm && now - sim_arm_report_ms >= kArmPollMs) {
+          sim_arm_report_ms = now;
+          agent.note_arm_state(*sim_arm != 0, now);
+        }
+        if (tel) tel->set_forced_arm(sim_arm ? static_cast<int>(*sim_arm) : -1, now);
         if (!tel && agent.low_power_enabled() && serial.is_open() && now - last_poll_ms >= kArmPollMs) {
           last_poll_ms = now;
           if (serial.write(status_req.data(), status_req.size()) < 0) serial.close();
@@ -1972,7 +1983,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
           for (auto& f : tel->take_frames(now)) fc_mav.push(std::move(f));
           if (tel->last_status_ms() != arm_status_ms) {
             arm_status_ms = tel->last_status_ms();
-            agent.note_arm_state(tel->state().armed, arm_status_ms);
+            if (!sim_arm) agent.note_arm_state(tel->state().armed, arm_status_ms);
           }
           if (now - last_diag_ms >= 5000) {
             last_diag_ms = now;
