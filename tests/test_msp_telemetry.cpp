@@ -167,6 +167,27 @@ TEST(boxids_reply_is_not_an_arm_report) {
   CHECK(t.state().armed);
 }
 
+// set_forced_arm (bench simulation): the HEARTBEAT and state().armed follow
+// the forced value over the FC's own flag, and -1 hands it back.
+TEST(forced_arm_overrides_the_fc_flag) {
+  MspTelemetry t;
+  uint64_t now = 1000;
+  auto v = reply_v1(2, {'B', 'T', 'F', 'L'});
+  t.on_serial_bytes(v.data(), v.size(), now);
+  std::vector<uint8_t> st;  // MSP_STATUS, flags = ANGLE only: disarmed
+  put16(st, 125); put16(st, 0); put16(st, 0x23); put32(st, 0x2); st.push_back(0); put16(st, 12); put16(st, 0);
+  st.push_back(0); st.push_back(0); put32(st, 0); st.push_back(0);
+  auto s = reply_v1(101, st);
+  t.on_serial_bytes(s.data(), s.size(), now += 20);
+  CHECK(!t.state().armed);
+  t.set_forced_arm(1, now += 20);
+  CHECK(t.state().armed);
+  t.on_serial_bytes(s.data(), s.size(), now += 500);   // the FC still says disarmed
+  CHECK(t.state().armed);
+  t.set_forced_arm(-1, now += 20);
+  CHECK(!t.state().armed);
+}
+
 TEST(betaflight_session_decodes_and_emits_every_message) {
   MspTelemetry t;
   uint64_t now = 1000;
