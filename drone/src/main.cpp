@@ -37,6 +37,7 @@
 
 #if defined(__linux__)
 #include <dirent.h>       // repin_inherited_threads() walks /proc/self/task
+#include <poll.h>
 #include <pthread.h>
 #include <sched.h>  // cpu_set_t — see the core-placement policy below
 #include <sys/syscall.h>  // SYS_gettid
@@ -66,6 +67,7 @@
 #include "mabur/ht40.h"
 #include "mabur/msp_source.h"
 #include "mabur/msp_status.h"
+#include "mabur/msp_telemetry.h"
 #include "mabur/profile.h"
 #include "mabur/rc_proto.h"
 #include "mabur/sbi.h"
@@ -73,6 +75,7 @@
 #include "mabur/fec_worker.h"
 #include "mabur/uep_encoder.h"
 #include "msp_serial.h"
+#include "fc_mav_queue.h"
 #include "power_plan.h"
 #include "power_tables.h"
 #include "probe_source.h"
@@ -1827,6 +1830,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // (MspSerial::read returns within its 100 ms VTIME).
   std::thread msp_thread;
   std::atomic<bool> msp_stop{false};
+  // FC telemetry packets ([msp] telemetry) on their way from the MSP thread
+  // to the MAV thread's T_MAV uplink (fc_mav_queue.h).
+  FcMavQueue fc_mav;
   auto run_msp = [&](std::atomic<bool>& stop, const MspCfg m) {
       name_thread("mbr-msp");
       // Robust control modulation, same tier as DISC_ACK; MSP is a third
@@ -1834,31 +1840,45 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       ControlRadiotap msp_radiotap = make_control_radiotap();
       uint16_t seq = 0;
       std::random_device rd;
-      MspSource src(to_msp_source_cfg(m),
-        [&](const uint8_t* body, size_t n) {
-          // Quiesce for the calibration session's duration -- the same
-          // "non-sweep PPDUs in the characterized airtime" telemetry
-          // suppression exists to avoid. Reading/decoding serial bytes
-          // continues regardless (src still gets on_serial_bytes() below),
-          // only the TRANSMIT is skipped, so the UART side never desyncs or
-          // overflows waiting out a session.
-          if (cal_active.load(std::memory_order_relaxed)) return;
-          const std::vector<uint8_t>& radiotap = msp_radiotap.get();
-          std::vector<uint8_t> frame;
-          frame.reserve(radiotap.size() + kDot11HeaderLen + n);
-          frame.insert(frame.end(), radiotap.begin(), radiotap.end());
-          auto hdr = build_dot11_header(seq);
-          seq = static_cast<uint16_t>((seq + 1) & 0xFFF);
-          frame.insert(frame.end(), hdr.begin(), hdr.end());
-          frame.insert(frame.end(), body, body + n);
-          dev_sink.send(frame.data(), frame.size());
-        },
-        rd());  // random initial_seq (SwEncoder restart-safety contract)
+      // DisplayPort screen snapshots, SBI stream 4 ([msp] snapshots).
+      std::optional<MspSource> src;
+      if (m.snapshots)
+        src.emplace(to_msp_source_cfg(m),
+          [&](const uint8_t* body, size_t n) {
+            // Quiesce for the calibration session's duration -- the same
+            // "non-sweep PPDUs in the characterized airtime" telemetry
+            // suppression exists to avoid. Reading/decoding serial bytes
+            // continues regardless (src still gets on_serial_bytes() below),
+            // only the TRANSMIT is skipped, so the UART side never desyncs or
+            // overflows waiting out a session.
+            if (cal_active.load(std::memory_order_relaxed)) return;
+            const std::vector<uint8_t>& radiotap = msp_radiotap.get();
+            std::vector<uint8_t> frame;
+            frame.reserve(radiotap.size() + kDot11HeaderLen + n);
+            frame.insert(frame.end(), radiotap.begin(), radiotap.end());
+            auto hdr = build_dot11_header(seq);
+            seq = static_cast<uint16_t>((seq + 1) & 0xFFF);
+            frame.insert(frame.end(), hdr.begin(), hdr.end());
+            frame.insert(frame.end(), body, body + n);
+            dev_sink.send(frame.data(), frame.size());
+          },
+          rd());  // random initial_seq (SwEncoder restart-safety contract)
+      // FC telemetry ([msp] telemetry): MSP polls on the same UART, each
+      // reply re-encoded as MAVLink 2 (sys 1, comp 1: the FC's own ids) and
+      // queued for the T_MAV uplink. Its status polls also carry the arm
+      // state, so the MSP_STATUS poll below stands down while it runs.
+      std::optional<mabur::MspTelemetry> tel;
+      if (m.telemetry) {
+        mabur::MspTelemetryCfg tc;
+        tc.mavlink2 = true;
+        tel.emplace(tc);
+      }
       std::fprintf(stderr,
-          "maburd msp: enabled symbol_size=%d window=%d block_payload=%d update_rate_hz=%.2g serial=%s baud=%d\n",
-          m.symbol_size, m.window,
-          m.symbol_size + static_cast<int>(mabur::sw::kSwHeaderLen),
-          m.update_rate_hz, m.serial.c_str(), m.baud);
+          "maburd msp: enabled serial=%s baud=%d snapshots=%d (symbol_size=%d window=%d block_payload=%d "
+          "update_rate_hz=%.2g) telemetry=%d\n",
+          m.serial.c_str(), m.baud, m.snapshots ? 1 : 0, m.symbol_size, m.window,
+          m.symbol_size + static_cast<int>(mabur::sw::kSwHeaderLen), m.update_rate_hz,
+          m.telemetry ? 1 : 0);
 
       // Low-power mode: ask the FC for its arm state.
       // MSP_STATUS is request/reply -- the FC pushes only DisplayPort on
@@ -1873,38 +1893,99 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       // NOT validated -- the flap direction is toward FULL power, i.e. the
       // safe side, so a too-small stale_ms costs bitrate, never safety.
       // Keep stale_ms comfortably above this (the bundle ships 2000), and if
-      // this poll period ever changes, revisit that margin.
+      // this poll period ever changes, revisit that margin. With telemetry
+      // on, its own status poll (500 ms) is the report instead.
       constexpr uint64_t kArmPollMs = 500;
       std::vector<uint8_t> status_req;
       mabur::msp_append_status_request(status_req);
       uint64_t last_poll_ms = 0;
-      // Installed whether or not low power is on: low_power.enable is a live
-      // knob, and the poll below is what gates the replies.
-      src.set_message_hook([&](const mabur::MspMessage& msg) {
+      // Without snapshots there is no MspSource to parse for the hook.
+      mabur::MspParser arm_parser;
+      auto on_arm_msg = [&](const mabur::MspMessage& msg) {
         if (auto armed = mabur::msp_status_armed(msg))
           agent.note_arm_state(*armed, now_steady_ms());
-      });
+      };
+      // Installed whether or not low power is on: low_power.enable is a live
+      // knob, and the poll below is what gates the replies.
+      if (src && !tel) src->set_message_hook(on_arm_msg);
+      uint64_t arm_status_ms = 0;  // tel: the last status reply already reported
 
+      // A 1 s back-off that still ends within 50 ms of a stop: a config
+      // apply (msp.enable = 0) and teardown join this thread.
+      auto backoff = [&] {
+        for (int k = 0; k < 20 && !stop.load(std::memory_order_relaxed) && !g_devourer_should_stop; ++k)
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      };
       MspSerial serial;
       uint8_t buf[512];
+      uint64_t last_req_ms = 0, last_diag_ms = 0;
+      uint32_t req_write_err = 0;
       while (!stop.load(std::memory_order_relaxed) && !g_devourer_should_stop) {
         if (!serial.is_open()) {
           if (!serial.open(m.serial, m.baud)) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            backoff();
             continue;
           }
           std::fprintf(stderr, "maburd msp: reading %s @ %d\n",
                        m.serial.c_str(), m.baud);
         }
-        int n = serial.read(buf, sizeof buf);
-        if (n > 0) src.on_serial_bytes(buf, static_cast<size_t>(n), now_steady_ms());
-        else if (n < 0) serial.close();  // error -> reconnect
+        bool readable = true;
+        if (tel) {
+          // The read below waits up to 100 ms (VTIME); the polls need a
+          // 20 ms step, so wait here instead and read only what is there.
+          pollfd pfd{serial.fd(), POLLIN, 0};
+          ::poll(&pfd, 1, 20);
+          if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            std::fprintf(stderr, "maburd msp: serial hung up, reopening\n");
+            serial.close();
+            backoff();
+            continue;
+          }
+          readable = (pfd.revents & POLLIN) != 0;
+        }
+        int n = readable ? serial.read(buf, sizeof buf) : 0;
+        const uint64_t now = now_steady_ms();
+        if (n > 0) {
+          if (src) src->on_serial_bytes(buf, static_cast<size_t>(n), now);
+          else if (!tel)
+            for (const auto& msg : arm_parser.feed(buf, static_cast<size_t>(n))) on_arm_msg(msg);
+          if (tel) tel->on_serial_bytes(buf, static_cast<size_t>(n), now);
+        } else if (n < 0) {
+          serial.close();  // error -> reconnect
+          continue;
+        }
 
-        if (agent.low_power_enabled() && serial.is_open()) {
-          uint64_t t = now_steady_ms();
-          if (t - last_poll_ms >= kArmPollMs) {
-            last_poll_ms = t;
-            if (serial.write(status_req.data(), status_req.size()) < 0) serial.close();
+        if (!tel && agent.low_power_enabled() && serial.is_open() && now - last_poll_ms >= kArmPollMs) {
+          last_poll_ms = now;
+          if (serial.write(status_req.data(), status_req.size()) < 0) serial.close();
+        }
+        if (tel && serial.is_open()) {
+          // At most one request per 20 ms: INAV drops requests that arrive
+          // back to back (msp_telemetry.h).
+          if (now - last_req_ms >= 20) {
+            const auto req = tel->next_request(now);
+            if (!req.empty()) {
+              last_req_ms = now;
+              if (serial.write(req.data(), req.size()) < 0) ++req_write_err;
+            }
+          }
+          for (auto& f : tel->take_frames(now)) fc_mav.push(std::move(f));
+          if (tel->last_status_ms() != arm_status_ms) {
+            arm_status_ms = tel->last_status_ms();
+            agent.note_arm_state(tel->state().armed, arm_status_ms);
+          }
+          if (now - last_diag_ms >= 5000) {
+            last_diag_ms = now;
+            const auto& s = tel->stats();
+            const auto& st = tel->state();
+            std::fprintf(stderr,
+                "maburd msp.telem: fc=%s alive=%d polls=%u replies=%u dp=%u unknown=%u mav_frames=%u "
+                "mav_bytes=%u queued=%zu dropped=%llu armed=%d mode=%u fix=%u sats=%u vbat=%.2f "
+                "amps=%.2f req_err=%u\n",
+                st.variant_id, tel->fc_alive(now) ? 1 : 0, s.polls, s.replies, s.displayport, s.unknown,
+                s.mav_frames, s.payload_bytes, fc_mav.size(),
+                static_cast<unsigned long long>(fc_mav.dropped()), st.armed ? 1 : 0, st.custom_mode,
+                st.fix, st.sats, st.vbat_cv / 100.0, st.amps_ca / 100.0, req_write_err);
           }
         }
       }
@@ -2120,10 +2201,13 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         last_hb = now;
       }
       if (linked && !cal_sweeping.load(std::memory_order_relaxed) &&
-          comp.outbound_packets() > 0 && now - last_up >= kMavUplinkMinMs) {
+          (comp.outbound_packets() > 0 || fc_mav.size() > 0) && now - last_up >= kMavUplinkMinMs) {
         rc::Mav m;
         m.counter = mav_up_counter.fetch_add(1, std::memory_order_relaxed);
-        const int packets = comp.take_outbound(&m.payload);
+        // The component's replies first, then FC telemetry in what is left:
+        // an ack never waits behind a stream of samples.
+        int packets = comp.take_outbound(&m.payload);
+        packets += fc_mav.take(&m.payload, rc::kMavMaxPayload);
         const auto mav = rc::pack_mav(m, /*tagged=*/false);
         const std::vector<uint8_t>& telem_radiotap = mav_radiotap.get();
         std::vector<uint8_t> frame;
