@@ -728,6 +728,8 @@ TEST(msp_defaults_and_parse) {
     CHECK(cfg.msp.baud == 115200);
     CHECK(cfg.msp.update_rate_hz == 1.0);
     CHECK(cfg.msp.symbol_size == 1312);
+    CHECK(cfg.msp.snapshots == true);
+    CHECK(cfg.msp.telemetry == false);
     std::filesystem::remove(path);
   }
   // Explicit values.
@@ -740,8 +742,12 @@ TEST(msp_defaults_and_parse) {
         "update_rate_hz = 2.0\n"
         "symbol_size = 1024\n"
         "window = 32\n"
-        "overhead = 0.5\n");
+        "overhead = 0.5\n"
+        "snapshots = false\n"
+        "telemetry = true\n");
     auto cfg = load_config(path.string());
+    CHECK(cfg.msp.snapshots == false);
+    CHECK(cfg.msp.telemetry == true);
     CHECK(cfg.msp.enable == true);
     CHECK(cfg.msp.serial == "/dev/ttyS1");
     CHECK(cfg.msp.baud == 230400);

@@ -587,7 +587,7 @@ void parse_link(const Value& j, LinkCfg& l) {
 
 void parse_msp(const Value& j, MspCfg& m) {
   check_known_keys(j, {"enable", "serial", "baud", "update_rate_hz",
-                        "symbol_size", "window", "overhead"}, "msp");
+                        "symbol_size", "window", "overhead", "snapshots", "telemetry"}, "msp");
   assign_if_present(j, "enable", m.enable, "msp");
   assign_if_present(j, "serial", m.serial, "msp");
   assign_if_present(j, "baud", m.baud, "msp");
@@ -595,6 +595,8 @@ void parse_msp(const Value& j, MspCfg& m) {
   assign_if_present(j, "symbol_size", m.symbol_size, "msp");
   assign_if_present(j, "window", m.window, "msp");
   assign_if_present(j, "overhead", m.overhead, "msp");
+  assign_if_present(j, "snapshots", m.snapshots, "msp");
+  assign_if_present(j, "telemetry", m.telemetry, "msp");
 
   if (m.update_rate_hz <= 0) fail("msp.update_rate_hz", "must be > 0");
   if (m.symbol_size < 16 || m.symbol_size > 2048)
