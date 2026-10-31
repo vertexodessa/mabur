@@ -168,6 +168,12 @@ struct MspCfg {
   int symbol_size = 1312;       // one snapshot per symbol
   int window = 16;
   double overhead = 1.0;
+  // snapshots: the DisplayPort screen stream (SBI stream 4) for an OSD
+  // drawn on the GS from the FC's own screen. telemetry: poll the FC over
+  // MSP and send its attitude, GPS, battery, mode and RC as MAVLink 2 up
+  // the T_MAV tunnel (msp_telemetry.h, docs/mavlink.md "FC over MSP").
+  bool snapshots = true;
+  bool telemetry = false;
 };
 
 // A-MPDU TX aggregation. OFF by default per the bench verdict

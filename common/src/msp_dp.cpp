@@ -19,6 +19,31 @@ void msp_append_message(std::vector<uint8_t>& out, uint8_t cmd,
   out.push_back(cks);
 }
 
+uint8_t msp_crc8_dvb_s2(uint8_t crc, uint8_t b) {
+  crc ^= b;
+  for (int i = 0; i < 8; ++i) crc = (crc & 0x80) ? static_cast<uint8_t>((crc << 1) ^ 0xD5) : static_cast<uint8_t>(crc << 1);
+  return crc;
+}
+
+void msp_append_message_v2(std::vector<uint8_t>& out, uint16_t cmd,
+                           const uint8_t* payload, size_t n) {
+  out.push_back('$');
+  out.push_back('X');
+  out.push_back('<');
+  const uint8_t hdr[5] = {0, static_cast<uint8_t>(cmd & 0xFF), static_cast<uint8_t>(cmd >> 8),
+                          static_cast<uint8_t>(n & 0xFF), static_cast<uint8_t>(n >> 8)};
+  uint8_t crc = 0;
+  for (uint8_t h : hdr) {
+    out.push_back(h);
+    crc = msp_crc8_dvb_s2(crc, h);
+  }
+  for (size_t i = 0; i < n; ++i) {
+    out.push_back(payload[i]);
+    crc = msp_crc8_dvb_s2(crc, payload[i]);
+  }
+  out.push_back(crc);
+}
+
 std::vector<MspMessage> MspParser::feed(const uint8_t* p, size_t n) {
   std::vector<MspMessage> out;
   for (size_t i = 0; i < n; ++i) {
@@ -29,7 +54,60 @@ std::vector<MspMessage> MspParser::feed(const uint8_t* p, size_t n) {
         if (dat == '$') state_ = VERSION;
         break;
       case VERSION:
-        state_ = (dat == 'M') ? DIRECTION : IDLE;
+        state_ = (dat == 'M') ? DIRECTION : (dat == 'X') ? V2_DIRECTION : IDLE;
+        break;
+      case V2_DIRECTION:
+        // '<' request / '>' reply / '!' error reply; anything else is garbage.
+        state_ = (dat == '<' || dat == '>' || dat == '!') ? V2_FLAG : IDLE;
+        break;
+      case V2_FLAG:
+        checksum_ = msp_crc8_dvb_s2(0, dat);
+        state_ = V2_CMD_LO;
+        break;
+      case V2_CMD_LO:
+        cmd16_ = dat;
+        checksum_ = msp_crc8_dvb_s2(checksum_, dat);
+        state_ = V2_CMD_HI;
+        break;
+      case V2_CMD_HI:
+        cmd16_ |= static_cast<uint16_t>(dat) << 8;
+        checksum_ = msp_crc8_dvb_s2(checksum_, dat);
+        state_ = V2_SIZE_LO;
+        break;
+      case V2_SIZE_LO:
+        size16_ = dat;
+        checksum_ = msp_crc8_dvb_s2(checksum_, dat);
+        state_ = V2_SIZE_HI;
+        break;
+      case V2_SIZE_HI:
+        size16_ |= static_cast<uint16_t>(dat) << 8;
+        // Both firmwares cap a frame at MSP_PORT_OUTBUF_SIZE (512): one
+        // corrupted size byte must not park the parser in V2_PAYLOAD for up
+        // to 64 KB, i.e. seconds of swallowed DisplayPort and replies.
+        if (size16_ > 512) {
+          state_ = IDLE;
+          break;
+        }
+        checksum_ = msp_crc8_dvb_s2(checksum_, dat);
+        ptr16_ = 0;
+        payload_.assign(size16_, 0);
+        state_ = size16_ > 0 ? V2_PAYLOAD : V2_CRC;
+        break;
+      case V2_PAYLOAD:
+        payload_[ptr16_] = dat;
+        checksum_ = msp_crc8_dvb_s2(checksum_, dat);
+        if (++ptr16_ == size16_) state_ = V2_CRC;
+        break;
+      case V2_CRC:
+        if (checksum_ == dat) {
+          MspMessage m;
+          m.cmd = 0;
+          m.payload = payload_;
+          m.v2 = true;
+          m.cmd16 = cmd16_;
+          out.push_back(std::move(m));
+        }
+        state_ = IDLE;
         break;
       case DIRECTION:
         // '<' command / '>' reply; anything else is garbage.
@@ -54,7 +132,13 @@ std::vector<MspMessage> MspParser::feed(const uint8_t* p, size_t n) {
         if (++buf_ptr_ == size_) state_ = CHECKSUM;
         break;
       case CHECKSUM:
-        if (checksum_ == dat) out.push_back(MspMessage{cmd_, payload_});
+        if (checksum_ == dat) {
+          MspMessage m;
+          m.cmd = cmd_;
+          m.payload = payload_;
+          m.cmd16 = cmd_;
+          out.push_back(std::move(m));
+        }
         state_ = IDLE;
         break;
     }
