@@ -4,6 +4,7 @@
 // the brief asks for, with every venc call gated on MABUR_HAVE_VENC so the
 // host build still compiles and serves (uniformly "disabled") responses.
 #include "debug_http.h"
+#include "sim_overrides.h"
 #include "rc_agent.h"
 
 #include <arpa/inet.h>
@@ -65,6 +66,40 @@ DebugReq debug_http_parse(const std::string& request_line) {
   }
   if (method == "GET" && target == "/venc") {
     req.kind = DebugReq::STATS;
+    return req;
+  }
+  // Bench simulation (sim_overrides.h): POST /sim?<key>=<value|off>[&ttl=<s>],
+  // GET /sim. Key and value are checked here against SimOverrides' table.
+  if (method == "GET" && target == "/sim") {
+    req.kind = DebugReq::SIM_GET;
+    return req;
+  }
+  static const std::string kSimPrefix = "/sim?";
+  if (method == "POST" && target.compare(0, kSimPrefix.size(), kSimPrefix) == 0) {
+    std::string query = target.substr(kSimPrefix.size());
+    std::string ttl_str;
+    const size_t amp = query.find('&');
+    if (amp != std::string::npos) {
+      const std::string rest = query.substr(amp + 1);
+      query = query.substr(0, amp);
+      if (rest.compare(0, 4, "ttl=") != 0) return req;
+      ttl_str = rest.substr(4);
+    }
+    const size_t eq = query.find('=');
+    if (eq == std::string::npos) return req;
+    const std::string key = query.substr(0, eq), val_str = query.substr(eq + 1);
+    if (!mabur::SimOverrides::known_key(key)) return req;
+    req.ttl = mabur::SimOverrides::kDefaultTtlS;
+    if (!ttl_str.empty() &&
+        (!parse_long_strict(ttl_str, &req.ttl) || req.ttl < 1 || req.ttl > mabur::SimOverrides::kMaxTtlS))
+      return req;
+    if (val_str == "off") {
+      req.clear = true;
+    } else if (!parse_long_strict(val_str, &req.val) || !mabur::SimOverrides::valid(key, req.val)) {
+      return req;
+    }
+    req.kind = DebugReq::SIM_SET;
+    req.key = key;
     return req;
   }
   static const std::string kSetPrefix = "/venc/set?";
@@ -229,6 +264,21 @@ void handle_conn(int fd, int snapshot_quality, mabur::OvOverride* feed) {
       break;
     case DebugReq::SET:
       handle_set(fd, req, feed);
+      break;
+    case DebugReq::SIM_SET: {
+      const uint64_t now = mabur::sim_now_ms();
+      if (req.clear) {
+        mabur::sim().clear(req.key);
+        std::fprintf(stderr, "sim: %s off\n", req.key.c_str());
+      } else {
+        mabur::sim().set(req.key, req.val, req.ttl, now);
+        std::fprintf(stderr, "sim: %s=%ld ttl=%lds\n", req.key.c_str(), req.val, req.ttl);
+      }
+      send_json(fd, "200 OK", mabur::sim().json(now) + "\n");
+      break;
+    }
+    case DebugReq::SIM_GET:
+      send_json(fd, "200 OK", mabur::sim().json(mabur::sim_now_ms()) + "\n");
       break;
     case DebugReq::BAD:
     default:
