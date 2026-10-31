@@ -289,6 +289,35 @@ The MAV thread and the TX writer share one atomic uplink counter, so the
 GS's duplicate filter sees one monotonic sequence. They count in the
 `stats:` line's `mav tx=`.
 
+## FC over MSP
+
+A tenant for a flight controller that speaks MSP on the drone's
+UART (Betaflight; INAV too) rather than MAVLink. With `[msp] telemetry =
+true` the MSP thread polls the FC for its variant, box ids, status,
+attitude, altitude, raw and computed GPS, analog, battery state and RC
+channels (`common/include/mabur/msp_telemetry.h`; one request per 20 ms at
+most, INAV drops requests that arrive back to back) and re-encodes each
+reply as the MAVLink 2 message a ground OSD reads: HEARTBEAT (1 Hz, while
+the FC answers), SYS_STATUS, BATTERY_STATUS, ATTITUDE, VFR_HUD,
+GLOBAL_POSITION_INT, GPS_RAW_INT, RC_CHANNELS, STATUSTEXT (arming-disable
+reasons, "FC silent"). The packets carry the FC's ids, system 1 component
+1, so a ground app sees them as the flight controller next to the
+parameter component (191).
+
+- Framing is `common/include/mabur/mavlink_lite.h`, not the vendored
+  library: the drone's one MAVLink TU stays `mav_component.cpp` (`mav.h`).
+  `tests/test_mavlink_lite_v2.cpp` parses every frame it writes with the
+  vendored library.
+- The MSP thread queues the packets (`drone/src/fc_mav_queue.h`, 32,
+  drop-oldest); the MAV thread appends them to each uplink frame after the
+  component's own replies, within `kMavMaxPayload`, under the same
+  session and calibration rules. Measured on a Betaflight quad: about
+  1 kB/s, well inside the tunnel's ~12 kB/s.
+- Its status polls are also the arm-state report for low-power mode; the
+  separate `MSP_STATUS` poll stands down while it runs.
+- `[msp] snapshots = false` stops the DisplayPort screen stream (SBI
+  stream 4) for a GS that draws its OSD from this telemetry instead.
+
 ## Later tenants
 
 Designed for, not built. Each is more traffic through the same tunnel and

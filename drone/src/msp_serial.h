@@ -14,6 +14,7 @@ class MspSerial {
   ~MspSerial() { close(); }
   bool open(const std::string& dev, int baud);
   bool is_open() const { return fd_ >= 0; }
+  int fd() const { return fd_; }
   int read(uint8_t* buf, size_t n);
   // Blocking write of n bytes (the 6-byte MSP_STATUS request); returns bytes
   // written or -1 (caller closes and reconnects, same as read).
