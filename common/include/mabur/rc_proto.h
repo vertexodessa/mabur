@@ -138,6 +138,13 @@ constexpr uint16_t CAP_CALIBRATE = 0x0004;
 // session and gates nothing on it.
 constexpr uint16_t CAP_MAVLINK = 0x0008;
 
+// Disc.cap_bits bit (GS -> drone, its own namespace): op_width is the GS
+// receiver's width and a proposal. The drone takes it when its own
+// radio.width allows (20 always, 40 only on a 40 config) and retunes with
+// the session's promotion, as for op_channel; agreed_width says what it
+// took. Without the bit op_width means nothing (older GSs always sent 20).
+constexpr uint16_t DISC_CAP_WIDTH = 0x0001;
+
 // VRX -> VTX feedback: the GS-authoritative operating point. Every field
 // here is one maburd acts on. It used to also carry ack_seq, an alink-style
 // score and per-layer delivery percentages; RC_VERSION 3 dropped all three

@@ -148,6 +148,9 @@ WebGs::WebGs(const maburgs::Config& cfg, Mode mode, uint8_t start_ch, int width,
     // from here on.
     maburgs::VrxCfg vc = maburgs::vrx_cfg_from(cfg, start_ch);
     vc.rz_nonce = opts_.rz_nonce;
+    // The DISC proposes the width the cards are tuned to: the page's width,
+    // which for a Spotter is its own pick and not the ladder's.
+    vc.width = static_cast<uint8_t>(width == 40 ? 40 : 20);
     vrx_ = std::make_unique<maburgs::VrxController>(vc);
     slot_ = std::make_unique<maburgs::RcfSlotter>(
         maburgs::RcfSlotCfg{cfg.link.rcf_slot_hold_ms, 100, 2, 3, 1});
