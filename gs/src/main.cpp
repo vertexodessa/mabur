@@ -1219,6 +1219,7 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
   hooks.width_refusal = [&](uint8_t w) { return chan.width_refusal(w); };
   hooks.set_width = [&](uint8_t w) {
     chan.set_width(w);
+    vrx.set_width(w);  // the next DISC proposes the new width to the drone
     cal_defaults_width = 0;  // the next tick recomposes cal_defaults at the new width
   };
   maburgs::GsConfigApplier cfg_apply(cfg_path, cfg, std::move(hooks),

@@ -42,7 +42,8 @@ mabur::rc::Disc VrxRendezvous::beacon() {
   mabur::rc::Disc d;
   d.vrx_nonce = nonce_;
   d.op_channel = proposal_;
-  d.op_width = 20;
+  d.op_width = cfg_.width;
+  d.cap_bits = mabur::rc::DISC_CAP_WIDTH;
   d.seq = seq_;
   return d;
 }
