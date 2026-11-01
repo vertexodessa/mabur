@@ -60,9 +60,18 @@ struct MockActuator : Actuator {
     return roi_ok;
   }
   void request_idr() override { ++idr_calls; }
+  // Parallel to `retunes`: the width a retune_width asked for, 0 for a
+  // plain retune.
+  std::vector<uint8_t> retune_widths;
   void retune(uint8_t ch, const char* reason) override {
     retunes.push_back(ch);
     retune_reasons.push_back(reason ? reason : "");
+    retune_widths.push_back(0);
+  }
+  void retune_width(uint8_t ch, uint8_t w, const char* reason) override {
+    retunes.push_back(ch);
+    retune_reasons.push_back(reason ? reason : "");
+    retune_widths.push_back(w);
   }
   std::vector<bool> records;
   bool record_ok = true;
@@ -143,8 +152,10 @@ std::vector<uint8_t> make_rcf_wire(uint16_t seq, uint8_t profile, uint8_t ov_16t
 
 std::vector<uint8_t> make_disc_wire(uint32_t nonce, uint8_t op_channel, uint8_t op_width,
                                     uint8_t init_profile, uint16_t seq,
-                                    const mabur::LinkKey& key = mabur::kDefaultLinkKey) {
+                                    const mabur::LinkKey& key = mabur::kDefaultLinkKey,
+                                    uint16_t cap_bits = 0) {
   Disc d;
+  d.cap_bits = cap_bits;
   d.vrx_nonce = nonce;
   d.op_channel = op_channel;
   d.op_width = op_width;
@@ -1545,6 +1556,104 @@ TEST(linked_keepalive_disc_foreign_channel_acks_without_retune) {
   CHECK(agent.state() == RcAgent::State::LINKED);
   CHECK(agent.current().generation == gen_before);           // no op re-apply
   CHECK(act.applied.size() == applied_before);
+}
+
+// DISC_CAP_WIDTH: op_width is a proposal. A 20 MHz GS on a 40 MHz drone
+// gets 20 in the ack, and the promoted session retunes the radio to 20 on
+// the channel it is on (no channel change needed for a width change).
+TEST(disc_cap_width_20_on_40_config_retunes_width) {
+  auto cfg = make_cfg();
+  cfg.radio.width = 40;
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});
+  auto wire = make_disc_wire(kVrx, 136, 20, 0, 1, mabur::kDefaultLinkKey, DISC_CAP_WIDTH);
+  agent.on_rc_frame(wire.data(), wire.size(), 100);
+  auto ack = parse_disc_ack(act.controls.back().data(), act.controls.back().size());
+  REQUIRE(ack.has_value());
+  CHECK(ack->agreed_width == 20);
+  CHECK(act.retunes.empty());
+  auto rcf = make_rcf_wire(1, encode_profile(PhyMode::HT, 0, 20), 8, ack->vtx_nonce);
+  agent.on_rc_frame(rcf.data(), rcf.size(), 150);
+  agent.tick(200, RadioHealth{});
+  REQUIRE(act.retunes.size() == 1);
+  CHECK(act.retunes[0] == 136);
+  CHECK(act.retune_widths[0] == 20);
+  CHECK(act.retune_reasons[0] == "disc");
+  // Confirmed by the next RCF: no revert.
+  auto rcf2 = make_rcf_wire(2, encode_profile(PhyMode::HT, 0, 20), 8, ack->vtx_nonce);
+  agent.on_rc_frame(rcf2.data(), rcf2.size(), 300);
+  agent.tick(2500, RadioHealth{});
+  CHECK(act.retunes.size() == 1);
+}
+
+// Width and channel together; an unconfirmed move restores both.
+TEST(disc_cap_width_move_unconfirmed_restores_width) {
+  auto cfg = make_cfg();
+  cfg.radio.width = 40;
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});
+  auto wire = make_disc_wire(kVrx, 149, 20, 0, 1, mabur::kDefaultLinkKey, DISC_CAP_WIDTH);
+  agent.on_rc_frame(wire.data(), wire.size(), 50);
+  auto rcf = make_rcf_wire(1, encode_profile(PhyMode::HT, 0, 20), 8, last_ack_vtx(act));
+  agent.on_rc_frame(rcf.data(), rcf.size(), 90);
+  agent.tick(100, RadioHealth{});
+  REQUIRE(act.retunes.size() == 1);
+  CHECK(act.retunes[0] == 149);
+  CHECK(act.retune_widths[0] == 20);
+  agent.tick(2100, RadioHealth{});
+  REQUIRE(act.retunes.size() == 2);
+  CHECK(act.retunes[1] == 136);
+  CHECK(act.retune_widths[1] == 40);
+  CHECK(act.retune_reasons[1] == "move_unconfirmed");
+}
+
+// Without the bit op_width is ignored (older GSs always sent 20), and a
+// 40 proposal to a 20 config is refused: the ack says the config width.
+TEST(disc_width_without_cap_or_beyond_config_keeps_config) {
+  auto cfg = make_cfg();
+  cfg.radio.width = 40;
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});
+  auto old_gs = make_disc_wire(kVrx, 136, 20, 0, 1);
+  agent.on_rc_frame(old_gs.data(), old_gs.size(), 100);
+  CHECK(parse_disc_ack(act.controls.back().data(), act.controls.back().size())->agreed_width == 40);
+  auto rcf = make_rcf_wire(1, encode_profile(PhyMode::HT, 0, 20), 8, last_ack_vtx(act));
+  agent.on_rc_frame(rcf.data(), rcf.size(), 150);
+  agent.tick(200, RadioHealth{});
+  CHECK(act.retunes.empty());
+
+  auto cfg20 = make_cfg();
+  cfg20.radio.width = 20;
+  MockActuator act20;
+  RcAgent agent20(cfg20, act20);
+  agent20.tick(0, RadioHealth{});
+  auto wide = make_disc_wire(kVrx, 136, 40, 0, 1, mabur::kDefaultLinkKey, DISC_CAP_WIDTH);
+  agent20.on_rc_frame(wide.data(), wide.size(), 100);
+  CHECK(parse_disc_ack(act20.controls.back().data(), act20.controls.back().size())->agreed_width ==
+        20);
+}
+
+// 40 proposed for a channel without an HT40 pair is 20: the ack and the
+// radio agree (the actuator tunes such a channel 20 too).
+TEST(disc_cap_width_40_on_unpaired_channel_is_20) {
+  auto cfg = make_cfg();
+  cfg.radio.width = 40;
+  cfg.radio.channels = {136, 149, 165};
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});
+  auto wire = make_disc_wire(kVrx, 165, 40, 0, 1, mabur::kDefaultLinkKey, DISC_CAP_WIDTH);
+  agent.on_rc_frame(wire.data(), wire.size(), 100);
+  CHECK(parse_disc_ack(act.controls.back().data(), act.controls.back().size())->agreed_width == 20);
+  auto rcf = make_rcf_wire(1, encode_profile(PhyMode::HT, 0, 20), 8, last_ack_vtx(act));
+  agent.on_rc_frame(rcf.data(), rcf.size(), 150);
+  agent.tick(200, RadioHealth{});
+  REQUIRE(act.retunes.size() == 1);
+  CHECK(act.retunes[0] == 165);
+  CHECK(act.retune_widths[0] == 20);
 }
 
 TEST(disc_same_channel_never_retunes) {
