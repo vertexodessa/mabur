@@ -118,6 +118,14 @@ class Actuator {
   // persist it to the state file so the next boot parks there. Default
   // no-op: tests and dry-run have nowhere to write.
   virtual void remember_channel(uint8_t ch) { (void)ch; }
+  // retune() that also changes the tuned width (20 or 40 MHz): a session
+  // whose GS proposed a width (DISC_CAP_WIDTH), or the unconfirmed-move
+  // revert of one. Same thread, contract and reasons as retune(). The
+  // default ignores the width, for actuators with no radio to retune.
+  virtual void retune_width(uint8_t ch, uint8_t width, const char* reason) {
+    (void)width;
+    retune(ch, reason);
+  }
 };
 
 // Radio-side health signals sampled once per tick. thermal_delta is
@@ -218,6 +226,7 @@ class RcAgent {
     uint32_t last_seq32 = 0;
     bool have_seq = false;
     uint8_t agreed_ch = 0;     // the DISC proposal this session was acked with
+    uint8_t agreed_w = 0;      // its width (0 = keep the current width)
   };
   const Session& current_session() const { return current_; }
 
@@ -421,6 +430,11 @@ class RcAgent {
   // the hop target == home, going "home" was a no-op and the pair split
   // 60 s.
   uint8_t move_from_ch_ = 0;
+  // The radio's tuned width: radio.width at boot, then what the current
+  // session agreed to. move_from_w_ is the width an unconfirmed move left,
+  // restored together with move_from_ch_.
+  uint8_t width_;
+  uint8_t move_from_w_ = 0;
 
   // In-flight hop order. have_hop_ is false until the first RCF carrying a
   // nonzero hop_ch is accepted; hop_epoch_/hop_ch_ then track the (epoch,
@@ -470,6 +484,11 @@ class RcAgent {
   bool verifies_under_(const uint8_t* body, size_t len, uint64_t session, uint32_t seq32) const;
   bool session_promoted_ = false;
   uint8_t deferred_move_ch_ = 0;   // executed in tick() after main sent the promote Telem
+  uint8_t deferred_move_w_ = 0;    // the same move's width (0 = unchanged)
+  // The width a DISC is answered with: its op_width when the GS set
+  // DISC_CAP_WIDTH and our config allows it, else radio.width.
+  uint8_t agree_width_(const rc::Disc& d, uint8_t ch) const;
+  static uint8_t fit_width_(uint8_t ch, uint8_t w);
   uint32_t fresh_vtx_nonce_();
   // true + fills *seq32 if the RCF bytes verify under s with a fresh seq.
   bool verify_rcf_(const uint8_t* body, size_t len, const rc::Rcf& r, const Session& s,
@@ -632,7 +651,7 @@ class RcAgent {
   void run_bitrate_policy(uint64_t now_ms, bool force);
   void run_congestion_guard(uint64_t now_ms, const RadioHealth& health);
   rc::DiscAck make_disc_ack(uint32_t vrx_nonce, uint32_t vtx_nonce, uint8_t flags, uint16_t seq,
-                            uint8_t agreed) const;
+                            uint8_t agreed, uint8_t agreed_w) const;
 
   bool member_(uint8_t ch) const { return mabur::channel_set_member(cfg_.radio.channels, ch); }
 };

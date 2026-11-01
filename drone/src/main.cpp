@@ -602,10 +602,12 @@ struct RealActuator : mabur::Actuator {
   // writer: it runs on the agent thread.
   std::atomic<bool>* retune_waiting = nullptr;
   uint8_t cur = 0;  // set to start_ch where the actuator is configured
+  uint8_t cur_w = 20;  // the tuned width, set with cur
   // A retune that arrived during a calibration sweep and has not been
   // performed yet (see retune() below). Agent-thread-only, like every other
   // member here.
   std::optional<uint8_t> deferred_ch;
+  uint8_t deferred_w = 0;  // 0 = the deferred retune keeps the width
   const char* deferred_reason = "";
 
   // Threading: FastRetune is a control-plane call, and devourer's IRtlRadio.h
@@ -631,20 +633,26 @@ struct RealActuator : mabur::Actuator {
   // link.
   // Not host-testable: RealActuator lives in main.cpp and needs a real
   // IRtlRadio, so this comment is the specification.
-  void retune(uint8_t ch, const char* reason) override {
+  void retune(uint8_t ch, const char* reason) override { retune_width(ch, 0, reason); }
+
+  // width 0 keeps the tuned width (FastRetune); 20/40 different from cur_w
+  // takes the full SetMonitorChannel path.
+  void retune_width(uint8_t ch, uint8_t width, const char* reason) override {
     if (!dev) {
-      std::fprintf(stderr, "[dry-run] retune(%u, %s)\n", static_cast<unsigned>(ch),
-                   reason);
+      std::fprintf(stderr, "[dry-run] retune(%u, %u MHz, %s)\n", static_cast<unsigned>(ch),
+                   static_cast<unsigned>(width), reason);
       return;
     }
     if (cal_active && cal_active->load(std::memory_order_relaxed)) {
       deferred_ch = ch;
+      // A plain retune deferred after a width change keeps that width.
+      if (width != 0 || !deferred_w) deferred_w = width;
       deferred_reason = reason;
       std::fprintf(stderr, "maburd: retune %u -> %u (%s) deferred (calibration active)\n",
                    static_cast<unsigned>(cur), static_cast<unsigned>(ch), reason);
       return;
     }
-    retune_now_(ch, reason);
+    retune_now_(ch, width, reason);
   }
 
   // Replays the retune retune() deferred, if any. Called from the agent
@@ -653,14 +661,16 @@ struct RealActuator : mabur::Actuator {
   void apply_deferred_retune() {
     if (!deferred_ch.has_value()) return;
     const uint8_t ch = *deferred_ch;
+    const uint8_t w = deferred_w;
     const char* reason = deferred_reason;
     deferred_ch.reset();
+    deferred_w = 0;
     deferred_reason = "";
     if (!dev) return;
-    retune_now_(ch, reason);
+    retune_now_(ch, w, reason);
   }
 
-  void retune_now_(uint8_t ch, const char* reason) {
+  void retune_now_(uint8_t ch, uint8_t width, const char* reason) {
     // Exclusive against every USB sender (DevourerSink/UsbTxPool take the
     // gate shared): FastRetune is a control-plane call and must not overlap
     // a bulk-OUT (devourer threading contract). ~2.4 ms on the 8812EU.
@@ -685,7 +695,18 @@ struct RealActuator : mabur::Actuator {
       // old channel before FastRetune reprograms it. Once-per-move 5 ms
       // TX stall.
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
-      dev->FastRetune(ch, /*cache_rf=*/true);
+      // FastRetune keeps the width; a width change (a 20 MHz session on a
+      // 40 config, or its revert) needs the full channel set. A 40 request
+      // on a channel without an HT40 pair stays 20.
+      const uint8_t w = (width == 40 && mabur::ht40_offset(ch) == 0) ? 20 : width;
+      if (w != 0 && w != cur_w) {
+        dev->SetMonitorChannel(w == 40 ? SelectedChannel{ch, mabur::ht40_offset(ch),
+                                                         CHANNEL_WIDTH_40}
+                                       : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
+        cur_w = w;
+      } else {
+        dev->FastRetune(ch, /*cache_rf=*/true);
+      }
       // Critical: FastRetune does NOT re-fold TX power for us at mabur's
       // settings. devourer re-derives it inside FastRetune only on a BAND
       // change and only when a global offset or an index override is live
@@ -716,8 +737,8 @@ struct RealActuator : mabur::Actuator {
     }
     if (retune_waiting) retune_waiting->store(false, std::memory_order_release);
     cur = ch;
-    std::fprintf(stderr, "maburd: retune %u -> %u (%s)\n", static_cast<unsigned>(from),
-                 static_cast<unsigned>(ch), reason);
+    std::fprintf(stderr, "maburd: retune %u -> %u, %u MHz (%s)\n", static_cast<unsigned>(from),
+                 static_cast<unsigned>(ch), static_cast<unsigned>(cur_w), reason);
     std::fprintf(stderr,
                  "maburd: retune %u -> %u: tx power re-applied (%s)\n",
                  static_cast<unsigned>(from), static_cast<unsigned>(ch),
@@ -1532,6 +1553,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   actuator.tx_gate = &tx_gate;
   actuator.retune_waiting = &retune_waiting;
   actuator.cur = start_ch;
+  actuator.cur_w = cfg.radio.width == 40 ? 40 : 20;  // as InitWrite
   actuator.control_rt.ldpc = &live_ldpc;
   actuator.control_rt.gen = &radiotap_gen;
   // Encoder starts at the "normal" ROI QP (RcAgent only calls set_roi_qp on

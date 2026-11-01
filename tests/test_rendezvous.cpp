@@ -159,4 +159,12 @@ TEST(beacon_carries_settable_proposal) {
   rz.set_proposal(149);
   CHECK(rz.beacon().op_channel == 149);
 }
+TEST(disc_proposes_width_and_follows_a_live_flip) {
+  VrxRendezvous rz(cfg());
+  CHECK(rz.beacon().op_width == 20);
+  CHECK(rz.beacon().cap_bits & mabur::rc::DISC_CAP_WIDTH);
+  rz.set_width(40);
+  CHECK(rz.beacon().op_width == 40);
+}
+
 MTEST_MAIN
