@@ -108,10 +108,6 @@ class MspTelemetry {
   // read as a DISARMED report (a maburd restart in flight would enter
   // low_power for one status period).
   uint64_t last_status_ms() const { return status_ms_; }
-  // Bench simulation (maburd's /sim?arm=): -1 = the FC's own arm flag,
-  // 0/1 = report disarmed/armed in the HEARTBEAT whatever the FC says. A
-  // change re-emits the HEARTBEAT at once once the FC has answered.
-  void set_forced_arm(int v, uint64_t now_ms);
   // True when the box with this permanent id is set in the last status.
   bool box_active(uint8_t permanent_id) const;
 
@@ -160,7 +156,6 @@ class MspTelemetry {
   uint32_t polls_at_reply_ = 0;                       // stats_.polls when the last reply landed
   bool hb_armed_ = false;  // armed flag the last HEARTBEAT carried
   uint64_t status_ms_ = 0;
-  int forced_arm_ = -1;
   bool have_battery_state_ = false;
   std::vector<std::vector<uint8_t>> pending_;
   size_t pending_bytes_ = 0;
