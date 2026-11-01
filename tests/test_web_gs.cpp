@@ -301,6 +301,36 @@ TEST(no_cap_without_offset) {
   CHECK(!last.cap_to_complete_us.has_value());   // no Telem -> no RTT offset
 }
 
+TEST(au_carries_frame_stream_skip_and_vcl_nal) {
+  // Clean feed: nothing skipped, every complete AU names its first slice.
+  {
+    Io io;
+    std::vector<Au> got;
+    io.on_au = [&](Au&& a) { got.push_back(std::move(a)); };
+    WebGs g(cfg(), Mode::Spotter, 136, 40, {}, 0, io);
+    feed(g, 30, 1'000'000);
+    CHECK(!got.empty());
+    for (const Au& a : got) {
+      CHECK(a.skipped_before == 0);
+      if (a.complete) CHECK(a.vcl_nal != 0 || !a.data.empty());
+    }
+  }
+  // Heavy loss: AUs that vanish whole surface as skipped_before on the next
+  // emitted one, so emitted + skipped accounts for more than emitted alone.
+  {
+    Io io;
+    uint64_t emitted = 0, skipped = 0;
+    io.on_au = [&](Au&& a) {
+      ++emitted;
+      skipped += a.skipped_before;
+    };
+    WebGs g(cfg(), Mode::Spotter, 136, 40, {}, 0, io);
+    feed(g, 60, 1'000'000, 2);
+    CHECK(emitted < 60);
+    CHECK(skipped > 0);
+  }
+}
+
 TEST(stats_json_has_mode_and_nulls) {
   Stats s;
   s.mode = Mode::Spotter;
