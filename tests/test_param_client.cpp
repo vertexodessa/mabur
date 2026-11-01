@@ -572,10 +572,11 @@ TEST(resend_stops_at_first_ack) {
   r2.sent.clear();
 
   // Well past several would-be resend intervals, but short of the
-  // IN_PROGRESS deadline: still no resend, because the row is no longer
-  // Sending.
+  // IN_PROGRESS deadline: no SET resend, because the row is no longer
+  // Sending; the one tick re-reads the row instead.
   r2.c.tick(3010 + 10000);
-  CHECK(r2.sent.empty());
+  REQUIRE(r2.sent.size() == 1);
+  CHECK(parse(r2.sent[0])[0].msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ);
   CHECK(r2.c.state().rows[9].st == ParamRowState::InProgress);
 }
 
@@ -598,7 +599,9 @@ TEST(final_deadline_from_first_in_progress) {
   r.sent.clear();
   r.c.tick(2000 + 15000 - 1);  // just before 15 s after the first IN_PROGRESS
   CHECK(r.c.state().rows[4].st == ParamRowState::InProgress);
-  CHECK(r.sent.empty());
+  REQUIRE(r.sent.size() == 1);  // the InProgress re-read, not a timeout
+  CHECK(parse(r.sent[0])[0].msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ);
+  r.sent.clear();
 
   r.c.tick(2000 + 15001);  // just after
   CHECK(r.c.state().rows[4].st == ParamRowState::Timeout);
@@ -609,6 +612,58 @@ TEST(final_deadline_from_first_in_progress) {
   auto msgs = parse(r.sent[0]);
   REQUIRE(msgs.size() == 1);
   CHECK(msgs[0].msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ);
+}
+
+// The drone sends the final ACCEPTED once. When the air drops it, the
+// re-read every kParamSetRetryMs while InProgress ends the set: a value
+// still the old one keeps waiting, the value that was set is Accepted.
+TEST(lost_accepted_is_recovered_by_the_reread) {
+  Rig r;
+  link_and_complete_list(r, 1000);
+  std::string why;
+  REQUIRE(r.c.set(2, "120@1280x720", 2000, &why));
+
+  auto str_wire = [](const char* text, char wire[128]) {
+    mabur::paramval::Value v{mabur::cfgparam::Type::Str};
+    v.s = text;
+    mabur::paramval::encode_wire(v, wire);
+  };
+  char old_wire[128], new_wire[128];
+  str_wire("90@1920x1080", old_wire);
+  str_wire("120@1280x720", new_wire);
+  Bytes ip = ack_pkt("VENC_MODE", 11, old_wire, PARAM_ACK_IN_PROGRESS);
+  r.c.on_packet(ip.data(), ip.size(), 2100);
+  r.sent.clear();
+
+  r.c.tick(2000 + 1999);
+  CHECK(r.sent.empty());
+  r.c.tick(2000 + 2000);
+  REQUIRE(r.sent.size() == 1);
+  {
+    auto msgs = parse(r.sent[0]);
+    REQUIRE(msgs.size() == 1);
+    CHECK(msgs[0].msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ);
+    mavlink_param_ext_request_read_t p;
+    mavlink_msg_param_ext_request_read_decode(&msgs[0], &p);
+    CHECK(p.param_index == 2);
+  }
+
+  // Still applying: the file holds the old value.
+  Bytes v_old = value_pkt("VENC_MODE", 11, old_wire, mabur::cfgparam::kCount, 2);
+  r.c.on_packet(v_old.data(), v_old.size(), 4050);
+  CHECK(r.c.state().rows[2].st == ParamRowState::InProgress);
+  CHECK(r.c.state().pending_row == 2);
+
+  r.sent.clear();
+  r.c.tick(4000 + 2000);
+  REQUIRE(r.sent.size() == 1);
+  Bytes v_new = value_pkt("VENC_MODE", 11, new_wire, mabur::cfgparam::kCount, 2);
+  r.c.on_packet(v_new.data(), v_new.size(), 6050);
+  CHECK(r.c.state().rows[2].st == ParamRowState::Accepted);
+  CHECK(r.c.state().rows[2].result_ms == 6050);
+  CHECK(r.c.state().pending_row == -1);
+  CHECK(r.c.state().list == ParamListState::Pending);  // VENC_MODE is Rebuild: re-list
+  CHECK(r.c.stats().timeouts == 0);
 }
 
 TEST(accepted_rebuild_row_relists) {
