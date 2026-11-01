@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "mabur/cal_mav.h"
+#include "mabur/ht40.h"
 #include "mabur/link_key.h"
 #include "mabur/rc_proto.h"
 #include "mabur/uep_encoder.h"
@@ -29,7 +30,8 @@ int round_to_100(double v) { return static_cast<int>(std::lround(v / 100.0) * 10
 RcAgent::RcAgent(const Config& cfg, Actuator& act, OvOverride* ovr, uint8_t start_ch)
     : cfg_(cfg), act_(act), ovr_(ovr),
       channel_(mabur::channel_set_member(cfg.radio.channels, start_ch) ? start_ch
-                                                                        : cfg.radio.channels.front()) {
+                                                                        : cfg.radio.channels.front()),
+      width_(static_cast<uint8_t>(cfg.radio.width)) {
   // Seed the live knobs from boot config -- a daemon that never calls
   // set_live_knobs reads exactly what cfg_ would have given it.
   knob_bitrate_max_kbps_.store(cfg.encoder.bitrate_max_kbps, std::memory_order_relaxed);
@@ -670,12 +672,13 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     // rides the ack and the pending pair; the move itself happens only once
     // that pair is promoted (see T_RCF).
     const uint8_t agreed = member_(d->op_channel) ? d->op_channel : channel_;
+    const uint8_t agreed_w = agree_width_(*d, agreed);
     if (!rc::verify_control(body, len, cfg_.link.key, rc::TagCtx{})) {
       // Wrong key on the GS. Answer so the GS can SHOW it instead of
       // looking like the stale-caps deadlock; change nothing else.
       auth_reject_.store(true, std::memory_order_relaxed);
       act_.send_control(rc::pack_disc_ack(
-          make_disc_ack(d->vrx_nonce, 0, rc::kAckKeyMismatch, d->seq, agreed)));
+          make_disc_ack(d->vrx_nonce, 0, rc::kAckKeyMismatch, d->seq, agreed, agreed_w)));
       return;
     }
     // A DISC only elicits an ack: no op, no retune, no LINKED
@@ -689,15 +692,17 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     } else if (pending_.valid && d->vrx_nonce == pending_.vrx_nonce) {
       vtx = pending_.vtx_nonce;                       // lost-ack retry: same answer
       pending_.agreed_ch = agreed;
+      pending_.agreed_w = agreed_w;
     } else {
       // New GS process, or our own GS heard again while we are NOT linked
       // (failsafe/rendezvous): a fresh pair, so its seq32 restarts on both
       // ends (the GS resets on a NEW vtx_nonce; a > 1 h gap would otherwise
       // desync the wrap count).
       vtx = fresh_vtx_nonce_();
-      pending_ = Session{d->vrx_nonce, vtx, true, 0, false, agreed};
+      pending_ = Session{d->vrx_nonce, vtx, true, 0, false, agreed, agreed_w};
     }
-    act_.send_control(rc::pack_disc_ack(make_disc_ack(d->vrx_nonce, vtx, 0, d->seq, agreed)));
+    act_.send_control(
+        rc::pack_disc_ack(make_disc_ack(d->vrx_nonce, vtx, 0, d->seq, agreed, agreed_w)));
     return;
   }
 
@@ -725,8 +730,12 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
       idr_epoch_seen_ = 0;
       idr_gs_pending_ = false;
       chain_idr_pending_ = false;
+      // Both after main's promote Telem. A width-only change names no
+      // channel: tick() applies it wherever a hop in between left us.
       if (current_.agreed_ch != 0 && current_.agreed_ch != channel_)
-        deferred_move_ch_ = current_.agreed_ch;          // after main's promote Telem
+        deferred_move_ch_ = current_.agreed_ch;
+      if (current_.agreed_w != 0 && current_.agreed_w != width_)
+        deferred_move_w_ = current_.agreed_w;
     } else {
       // Wrong key, wrong pair, stale or replayed seq: drop, flag for the
       // next Telem, never move the seq tracker. No log.
@@ -766,6 +775,7 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
       if (member_(r->hop_ch) && r->hop_ch != channel_) {
         act_.retune(r->hop_ch, "hop");
         move_from_ch_ = channel_;
+        move_from_w_ = width_;
         channel_ = r->hop_ch;
         move_pending_ = true;
         move_at_ms_ = now_ms;
@@ -841,12 +851,19 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
   // A promoted session's agreed channel. Run
   // here, not on the promoting RCF, so main has sent one Telem saying
   // LINKED on the CURRENT channel first -- the GS follows on it.
-  if (deferred_move_ch_ != 0) {
-    const uint8_t ch = deferred_move_ch_;
+  if (deferred_move_ch_ != 0 || deferred_move_w_ != 0) {
+    const uint8_t ch = deferred_move_ch_ != 0 ? deferred_move_ch_ : channel_;
+    const uint8_t w = deferred_move_w_ != 0 ? fit_width_(ch, deferred_move_w_) : 0;
     deferred_move_ch_ = 0;
-    act_.retune(ch, "disc");
+    deferred_move_w_ = 0;
+    if (w != 0)
+      act_.retune_width(ch, w, "disc");
+    else
+      act_.retune(ch, "disc");
     move_from_ch_ = channel_;
+    move_from_w_ = width_;
     channel_ = ch;
+    if (w != 0) width_ = w;
     move_pending_ = true;
     move_at_ms_ = now_ms;
   }
@@ -861,11 +878,16 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
     // channel. Back to the channel we came from -- where the GS found us,
     // or where a withdrawing GS still is -- and stay there. There is no
     // home to fall through to.
-    if (move_from_ch_ != 0 && move_from_ch_ != channel_) {
+    if (move_from_ch_ != 0 && move_from_w_ != 0 && move_from_w_ != width_) {
+      act_.retune_width(move_from_ch_, move_from_w_, "move_unconfirmed");
+      channel_ = move_from_ch_;
+      width_ = fit_width_(move_from_ch_, move_from_w_);
+    } else if (move_from_ch_ != 0 && move_from_ch_ != channel_) {
       act_.retune(move_from_ch_, "move_unconfirmed");
       channel_ = move_from_ch_;
     }
     move_from_ch_ = 0;
+    move_from_w_ = 0;
     move_pending_ = false;
     if (state_ == State::LINKED) apply_max_range(now_ms);
     state_ = State::RENDEZVOUS;
@@ -1024,8 +1046,23 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
   run_congestion_guard(now_ms, health);
 }
 
+uint8_t RcAgent::agree_width_(const rc::Disc& d, uint8_t ch) const {
+  const uint8_t cfg_w = static_cast<uint8_t>(cfg_.radio.width);
+  // A GS without the bit keeps the old contract: the drone's config width,
+  // whatever the radio was left at by an earlier session.
+  if (!(d.cap_bits & rc::DISC_CAP_WIDTH)) return cfg_w;
+  // 40 only where the config is 40 and the channel has an HT40 pair (a 20
+  // config's ladder never airs 40 MHz frames); anything else is 20.
+  return (d.op_width == 40 && cfg_w == 40) ? fit_width_(ch, 40) : 20;
+}
+
+uint8_t RcAgent::fit_width_(uint8_t ch, uint8_t w) {
+  // RealActuator's rule: a channel without an HT40 pair tunes 20.
+  return (w == 40 && mabur::ht40_offset(ch) != 0) ? 40 : 20;
+}
+
 rc::DiscAck RcAgent::make_disc_ack(uint32_t vrx_nonce, uint32_t vtx_nonce, uint8_t flags,
-                                   uint16_t seq, uint8_t agreed) const {
+                                   uint16_t seq, uint8_t agreed, uint8_t agreed_w) const {
   DiscAck ack;
   ack.vrx_nonce = vrx_nonce;
   ack.vtx_nonce = vtx_nonce;
@@ -1044,9 +1081,10 @@ rc::DiscAck RcAgent::make_disc_ack(uint32_t vrx_nonce, uint32_t vtx_nonce, uint8
   // agreed is member_(op_channel) ? the DISC's proposed op_channel : the
   // current channel -- computed by the caller, which also stores it in the
   // pending pair whose promotion drives the actual retune, so the ack and the
-  // move can never disagree about what was agreed to.
+  // move can never disagree about what was agreed to. agreed_w likewise
+  // (agree_width_).
   ack.agreed_channel = agreed;
-  ack.agreed_width = cfg_.radio.width;
+  ack.agreed_width = agreed_w;
   ack.seq = seq;
   return ack;
 }
