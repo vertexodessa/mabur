@@ -87,6 +87,11 @@ struct Au {
   bool salvaged = false;
   uint64_t t_first_us = 0;         // core clock
   uint64_t t_complete_us = 0;      // core clock
+  // FrameStream's AuLatMeta, for a host-side refresh requester
+  // (gs/src/refresh_requester.h note_au): whole AUs skipped right before
+  // this one, and the NAL type of its first slice (0 when it has none).
+  uint32_t skipped_before = 0;
+  uint8_t vcl_nal = 0;
   std::optional<int64_t> cap_to_complete_us;  // GS mode once RTT has an offset
 };
 

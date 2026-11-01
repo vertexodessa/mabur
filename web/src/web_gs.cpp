@@ -113,6 +113,8 @@ WebGs::WebGs(const maburgs::Config& cfg, Mode mode, uint8_t start_ch, int width,
              if (cur_.salvaged) ++aus_salvaged_;
              cur_.t_first_us = lat.t_first_us;
              cur_.t_complete_us = now_us_;
+             cur_.skipped_before = lat.skipped_before;
+             cur_.vcl_nal = lat.vcl_nal;
              if (slot_)
                slot_->on_au_complete(now_us_ / 1000,
                                      cur_.sid < 2 &&
