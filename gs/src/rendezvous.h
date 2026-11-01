@@ -26,6 +26,8 @@ struct VrxRzConfig {
   // NEW session on the drone (its seq32 restarts), so the nonce is never
   // derived from config. Tests and the hop-inject self-test pin one.
   uint32_t nonce = 0;
+  // Proposed to the drone in Disc.op_width (DISC_CAP_WIDTH).
+  uint8_t width = 20;
 };
 
 class VrxRendezvous {
@@ -41,6 +43,8 @@ class VrxRendezvous {
   uint32_t nonce() const { return nonce_; }
   std::optional<uint32_t> vtx_nonce() const { return vtx_nonce_; }
   void set_proposal(uint8_t ch) { proposal_ = ch; }
+  // The receiver width the next DISC proposes (a live width flip).
+  void set_width(uint8_t w) { cfg_.width = w; }
   uint8_t proposal() const { return proposal_; }
 
  private:
