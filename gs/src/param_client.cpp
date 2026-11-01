@@ -37,6 +37,19 @@ void ParamClient::send_list_request() {
   ++stats_.tx;
 }
 
+namespace {
+bool same_value(const mabur::paramval::Value& a, const mabur::paramval::Value& b) {
+  if (a.type != b.type) return false;
+  switch (a.type) {
+    case mabur::cfgparam::Type::Bool: return a.b == b.b;
+    case mabur::cfgparam::Type::Int32: return a.i == b.i;
+    case mabur::cfgparam::Type::Real32: return a.f == b.f;
+    case mabur::cfgparam::Type::Str: return a.s == b.s;
+  }
+  return false;
+}
+}  // namespace
+
 void ParamClient::send_read_request(size_t idx) {
   mavlink_message_t m;
   char id[16] = {};  // blank: param_index selects the row, not the id
@@ -158,6 +171,11 @@ void ParamClient::on_packet(const uint8_t* p, size_t n, uint64_t now_ms) {
       state_.rows[idx].have_value = true;
       fresh_[idx] = true;
       changed = true;
+      // The drone sends the final ACCEPTED once; when the air drops it, the
+      // re-read tick() sends while InProgress finds the published value.
+      if (idx == state_.pending_row && set_in_progress_ && same_value(val, set_value_)) {
+        accept_pending(static_cast<size_t>(idx), now_ms);
+      }
       if (state_.list == ParamListState::Pending || state_.list == ParamListState::Partial) {
         bool all = true;
         for (size_t i = 0; i < kCount; ++i) {
@@ -199,14 +217,7 @@ void ParamClient::on_packet(const uint8_t* p, size_t n, uint64_t now_ms) {
           row.st = ParamRowState::InProgress;
           break;
         case PARAM_ACK_ACCEPTED:
-          row.st = ParamRowState::Accepted;
-          row.result_ms = now_ms;
-          state_.pending_row = -1;
-          set_in_progress_ = false;
-          set_resends_ = 0;
-          if (mabur::cfgparam::kTable[idx].apply == mabur::cfgparam::Apply::Rebuild) {
-            begin_list(now_ms);  // a VENC_MODE set may have moved REC_SIZE along with it
-          }
+          accept_pending(static_cast<size_t>(idx), now_ms);
           break;
         case PARAM_ACK_FAILED:
           row.st = ParamRowState::Failed;
@@ -288,6 +299,18 @@ void ParamClient::on_packet(const uint8_t* p, size_t n, uint64_t now_ms) {
   if (changed) ++seq_;
 }
 
+void ParamClient::accept_pending(size_t idx, uint64_t now_ms) {
+  ParamRow& row = state_.rows[idx];
+  row.st = ParamRowState::Accepted;
+  row.result_ms = now_ms;
+  state_.pending_row = -1;
+  set_in_progress_ = false;
+  set_resends_ = 0;
+  if (mabur::cfgparam::kTable[idx].apply == mabur::cfgparam::Apply::Rebuild) {
+    begin_list(now_ms);  // a VENC_MODE set may have moved REC_SIZE along with it
+  }
+}
+
 void ParamClient::tick(uint64_t now_ms) {
   bool changed = false;
   if (alive_cached_ && !alive(now_ms)) {
@@ -299,6 +322,11 @@ void ParamClient::tick(uint64_t now_ms) {
       if (now_ms >= set_deadline_ms_) {
         timeout_pending(now_ms);
         changed = true;
+      } else if (now_ms - set_send_ms_ >= kParamSetRetryMs) {
+        // The drone answers a read with the file as published, so the
+        // requested value there means the apply succeeded.
+        send_read_request(static_cast<size_t>(state_.pending_row));
+        set_send_ms_ = now_ms;
       }
     } else if (now_ms - set_send_ms_ >= kParamSetRetryMs) {
       if (set_resends_ < kParamSetRetries) {

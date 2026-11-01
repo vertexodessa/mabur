@@ -34,7 +34,11 @@
 // starts a kParamFinalMs deadline from that moment -- a repeated
 // IN_PROGRESS updates the row's value but never extends the deadline, and
 // tick() times the row out the same way if the deadline passes with no
-// final answer. PARAM_ACK_ACCEPTED/FAILED/VALUE_UNSUPPORTED for the
+// final answer. While InProgress, tick() sends a PARAM_EXT_REQUEST_READ of
+// the row every kParamSetRetryMs: the drone sends the final ack once, and
+// a PARAM_EXT_VALUE carrying the value that was set (the drone's file
+// holds it only once the apply published) ends the set as Accepted, the
+// same as a PARAM_ACK_ACCEPTED would. PARAM_ACK_ACCEPTED/FAILED/VALUE_UNSUPPORTED for the
 // pending row is terminal: the row's state and value are set, pending_row
 // clears, and an ACCEPTED on a row whose apply is Rebuild starts a fresh
 // list round (a VENC_MODE set can move REC_SIZE's value along with it). An
@@ -154,6 +158,7 @@ class ParamClient {
   void begin_list(uint64_t now_ms);  // the shared body of refresh() and an ACCEPTED Rebuild row
   void refuse(size_t row, const std::string& why, uint64_t now_ms);
   void timeout_pending(uint64_t now_ms);  // Timeout from either tick() path: resends exhausted or the final deadline
+  void accept_pending(size_t idx, uint64_t now_ms);  // Accepted from a final ack or the InProgress re-read
 
   SendFn send_;
   uint8_t sysid_, compid_;
