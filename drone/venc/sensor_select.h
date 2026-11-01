@@ -48,7 +48,10 @@ typedef struct {
 
 typedef struct {
 	int forced_pad;           /* -1 = auto-detect */
-	CameraMode want_mode;     /* the mode to use; w == 0 = auto-select */
+	int pick_mode;            /* 1 = camera_mode_pick() from the driver's
+	                           * list for target_fps and rec_*; 0 = score */
+	uint32_t rec_width;       /* the recorder's size, 0 = none */
+	uint32_t rec_height;
 	uint32_t target_width;
 	uint32_t target_height;
 	uint32_t target_fps;

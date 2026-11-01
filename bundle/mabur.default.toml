@@ -51,7 +51,7 @@ roi_qp_normal      = 0
 [venc]
 sensor_bin = "/etc/sensors/imx415_greg_fpvXIX_colortrans.bin"  # camera sensor tuning file
 size       = "1920x1080"
-fps        = 60            # 1..120: up to 90 the full-view 1920x1080 camera mode, 91-100 1728x972, 101-120 1728x816;
+fps        = 60            # 1..120: up to 90 the full-view 1920x1080 camera mode, above it a binned crop of the driver (docs/camera-modes.md);
                            # size must keep that mode's aspect ratio and fit inside it (docs/camera-modes.md)
 gop_s      = 0             # seconds between refresh starts; 0 = none: the GS asks for an IDR when its picture is damaged
 qp_delta   = 4             # quality offset between keyframes and P-frames

@@ -1,6 +1,5 @@
-// Host test for drone/venc/camera_modes.c: which sensor mode serves which
-// venc.fps, how the pipeline finds it in the driver's list, and which
-// encode sizes a mode can serve.
+// Host test for drone/venc/camera_modes.c: which mode of a driver's list
+// serves which venc.fps, and which encode sizes a mode can serve.
 #include "camera_modes.h"
 #include "mtest.h"
 
@@ -17,17 +16,35 @@ const CameraMode kStock[] = {
 
 }  // namespace
 
-TEST(mode_for_picks_by_fps) {
-  CHECK(same(camera_mode_for(60, 1920, 1080), CameraMode{1920, 1080, 90}));
-  CHECK(same(camera_mode_for(90, 1920, 1080), CameraMode{1920, 1080, 90}));
-  CHECK(same(camera_mode_for(91, 1920, 1080), CameraMode{1728, 972, 100}));
-  CHECK(same(camera_mode_for(100, 1920, 1080), CameraMode{1728, 972, 100}));
-  CHECK(same(camera_mode_for(101, 1920, 1080), CameraMode{1728, 816, 120}));
-  CHECK(same(camera_mode_for(120, 1920, 1080), CameraMode{1728, 816, 120}));
+TEST(pick_waybeam_by_fps) {
+  auto at = [](uint32_t fps) { return camera_mode_pick(kWaybeam, 5, fps, 0, 0); };
+  CHECK(at(30) == 2);
+  CHECK(at(60) == 2);  // the binned full view, not the 2816x1584 crop
+  CHECK(at(90) == 2);
+  CHECK(at(91) == 3);
+  CHECK(at(100) == 3);
+  CHECK(at(101) == 4);
+  CHECK(at(120) == 4);
+  CHECK(at(121) == -1);
 }
 
-TEST(mode_for_4k_record_wins) {
-  CHECK(same(camera_mode_for(30, 3840, 2160), CameraMode{3840, 2160, 33}));
+TEST(pick_stock_by_fps) {
+  auto at = [](uint32_t fps) { return camera_mode_pick(kStock, 4, fps, 0, 0); };
+  CHECK(at(60) == 2);  // not the 2560x1440 crop
+  CHECK(at(90) == 2);
+  CHECK(at(100) == 3);
+  CHECK(at(120) == 3);
+}
+
+TEST(pick_4k_record_wins) {
+  CHECK(camera_mode_pick(kWaybeam, 5, 30, 3840, 2160) == 0);
+  CHECK(camera_mode_pick(kStock, 4, 30, 3840, 2160) == 0);
+  CHECK(camera_mode_pick(kStock, 4, 60, 3840, 2160) == -1);
+}
+
+TEST(known_lineups_match_the_tables) {
+  CHECK(same(camera_lineup_waybeam[4], kWaybeam[4]));
+  CHECK(same(camera_lineup_stock[3], kStock[3]));
 }
 
 TEST(find_matches_geometry_and_max_fps) {
@@ -38,15 +55,30 @@ TEST(find_matches_geometry_and_max_fps) {
   CHECK(camera_mode_find(kStock, 4, CameraMode{3840, 2160, 33}) == -1);
 }
 
-TEST(size_ok_needs_aspect_and_fit) {
-  const CameraMode m100{1728, 972, 100}, m120{1728, 816, 120};
+TEST(size_ok_allows_a_small_precrop) {
+  const CameraMode m100{1728, 972, 100}, m120{1728, 816, 120}, s120{1472, 816, 120};
   CHECK(camera_mode_size_ok(m100, 1280, 720) == 1);
   CHECK(camera_mode_size_ok(m100, 1728, 972) == 1);
   CHECK(camera_mode_size_ok(m100, 1920, 1080) == 0);  // larger than the mode
-  CHECK(camera_mode_size_ok(m100, 1472, 816) == 0);   // other aspect
   CHECK(camera_mode_size_ok(m120, 1728, 816) == 1);
   CHECK(camera_mode_size_ok(m120, 1152, 544) == 1);
-  CHECK(camera_mode_size_ok(m120, 1280, 720) == 0);
+  CHECK(camera_mode_size_ok(m120, 1280, 720) == 0);   // 16:9 is 16 % off 2.12:1
+  // 16:9 on 1472x816 is 1.5 % off: the precrop keeps 1450x816.
+  CHECK(camera_mode_size_ok(s120, 1280, 720) == 1);
+  CHECK(camera_mode_size_ok(s120, 1440, 810) == 1);
+  CHECK(camera_mode_size_ok(s120, 1472, 828) == 0);   // taller than the mode
+  CHECK(camera_mode_size_ok(s120, 1460, 822) == 0);   // wider than the 1450 window
+  CHECK(camera_mode_size_ok(s120, 0, 0) == 0);
+}
+
+TEST(known_fit_takes_either_lineup) {
+  CameraMode a{}, b{};
+  CHECK(camera_mode_known_fit(120, 0, 0, 1280, 720, &a, &b) == 1);   // stock
+  CHECK(camera_mode_known_fit(120, 0, 0, 1728, 816, &a, &b) == 1);   // waybeam
+  CHECK(camera_mode_known_fit(100, 0, 0, 1920, 1080, &a, &b) == 0);
+  CHECK(same(a, CameraMode{1728, 972, 100}) && same(b, CameraMode{1472, 816, 120}));
+  CHECK(camera_mode_known_fit(130, 0, 0, 1280, 720, &a, &b) == 0);
+  CHECK(a.w == 0 && b.w == 0);
 }
 
 MTEST_MAIN

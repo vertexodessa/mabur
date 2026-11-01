@@ -16,13 +16,16 @@ uint32_t pipeline_common_gop_frames(double gop_seconds, uint32_t fps)
 
 #ifndef PLATFORM_CV610
 SensorSelectConfig pipeline_common_build_sensor_select_config(int forced_pad,
-	CameraMode want_mode, uint32_t target_width, uint32_t target_height,
+	int pick_mode, uint32_t rec_width, uint32_t rec_height,
+	uint32_t target_width, uint32_t target_height,
 	uint32_t target_fps)
 {
 	SensorSelectConfig cfg;
 
 	cfg.forced_pad = forced_pad;
-	cfg.want_mode = want_mode;
+	cfg.pick_mode = pick_mode;
+	cfg.rec_width = rec_width;
+	cfg.rec_height = rec_height;
 	cfg.target_width = target_width;
 	cfg.target_height = target_height;
 	cfg.target_fps = target_fps;

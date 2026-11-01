@@ -34,10 +34,11 @@
 /* The sensor mode is not auto-selected: sensor_mode_cost() ranks maxFps
  * excess above resolution fit, so at 60 fps it would take the 2560x1440@60
  * non-binned crop (a 1.5x narrower view) over the 2x2-binned full-view
- * 1920x1080@90. camera_mode_for() names the mode for venc.fps instead, and
- * sensor_select finds it in the driver's list by geometry and ceiling
- * (camera_modes.h, docs/camera-modes.md); a driver without it fails boot
- * rather than silently running another geometry. Verify on the device with
+ * 1920x1080@90. camera_mode_pick() chooses from the driver's list by
+ * geometry and ceiling instead (the widest binned mode that reaches
+ * venc.fps, camera_modes.h, docs/camera-modes.md), and a venc.size that
+ * does not fit that mode fails the start rather than running another
+ * geometry. Verify on the device with
  * `grep Cur /proc/mi_modules/mi_sensor/mi_sensor0`. */
 /* MJPEG snapshot channel; 7 is well clear of the encoder's ch0. */
 #define STAR6E_SNAPSHOT_CHANNEL     7
@@ -991,7 +992,7 @@ static int prepare_pipeline_config(const VencCfg *cfg,
 		venc_record_size(&rec_w, &rec_h);
 		pconf->sensor_cfg = pipeline_common_build_sensor_select_config(
 			STAR6E_SENSOR_FORCED_PAD,
-			camera_mode_for(pconf->sensor_framerate, rec_w, rec_h),
+			1, rec_w, rec_h,
 			pconf->sensor_width,
 			pconf->sensor_height, pconf->sensor_framerate);
 	}

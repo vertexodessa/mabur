@@ -786,23 +786,31 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     if (rw % 2 || rh % 2 || rw < 320 || rh < 180 || rw > 3840 || rh > 2160)
       fail("record.size", "must be even and within 320x180..3840x2160");
     // Above 1080p only the sensor's 3840x2160 mode can feed it
-    // (camera_mode_for in drone/venc/camera_modes.c), and that caps the link too.
+    // (camera_mode_pick in drone/venc/camera_modes.c), and that caps the link too.
     if ((rw > 1920 || rh > 1080) && cfg.venc.core.fps > 30)
       fail("record.size", "above 1920x1080 needs the 30 fps sensor mode: set venc.fps <= 30");
   }
 
-  // venc.fps (and a 4K recording) selects the sensor mode; the VPE only
-  // scales that mode down, so venc.size must keep its aspect ratio and fit
-  // inside it (docs/camera-modes.md).
+  // venc.fps (and a 4K recording) selects the sensor mode from the driver's
+  // list; the VPE only scales that mode down after a keep-aspect precrop, so
+  // venc.size must fit it (docs/camera-modes.md). The loader cannot see the
+  // driver, so a size one of the two known lineups serves passes here and
+  // the pipeline checks it against the mode actually picked.
   {
     const bool rec = cfg.record.enable && cfg.record.width > 0;
-    const CameraMode m = camera_mode_for(cfg.venc.core.fps, rec ? cfg.record.width : 0,
-                                         rec ? cfg.record.height : 0);
-    if (!camera_mode_size_ok(m, cfg.venc.core.width, cfg.venc.core.height))
+    CameraMode wb{}, st{};
+    if (!camera_mode_known_fit(cfg.venc.core.fps, rec ? cfg.record.width : 0,
+                               rec ? cfg.record.height : 0, cfg.venc.core.width,
+                               cfg.venc.core.height, &wb, &st)) {
+      auto name = [](CameraMode m) {
+        return m.w ? to_text(m.w) + "x" + to_text(m.h) : std::string("none");
+      };
       fail("venc.size", to_text(cfg.venc.core.width) + "x" + to_text(cfg.venc.core.height) +
-                            " does not fit the " + to_text(m.w) + "x" + to_text(m.h) +
-                            " sensor mode used at " + to_text(cfg.venc.core.fps) +
-                            " fps (same aspect ratio, no larger)");
+                            " does not fit the sensor mode used at " +
+                            to_text(cfg.venc.core.fps) + " fps (" + name(wb) +
+                            " on the waybeam driver, " + name(st) +
+                            " on the stock one; aspect within 2 %, no larger)");
+    }
   }
 
   return cfg;

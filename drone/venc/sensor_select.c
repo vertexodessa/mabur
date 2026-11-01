@@ -325,16 +325,47 @@ static int find_best_mode(const SensorSelectConfig *cfg,
 		if (ret != 0 || count == 0)
 			continue;
 
+		/* The driver's list as CameraModes, to pick by geometry and
+		 * ceiling rather than by index. */
+		CameraMode offered[16];
+		int n_offered = 0, picked = -1;
+		if (cfg->pick_mode) {
+			for (MI_U32 idx = 0; idx < count && idx < 16; ++idx) {
+				MI_SNR_Res_t res = {0};
+				CameraMode m = {0, 0, 0};
+				if (MI_SNR_GetRes((MI_SNR_PAD_ID_e)p, idx, &res) == 0) {
+					m.w = (uint16_t)res.output.width;
+					m.h = (uint16_t)res.output.height;
+					m.max_fps = (uint16_t)res.maxFps;
+				}
+				offered[n_offered++] = m;
+			}
+			picked = camera_mode_pick(offered, n_offered,
+				cfg->target_fps, cfg->rec_width, cfg->rec_height);
+			if (picked < 0) {
+				fprintf(stderr, "ERROR: pad %d offers no mode for %u fps\n",
+					p, cfg->target_fps);
+				continue;
+			}
+		}
+
 		for (MI_U32 idx = 0; idx < count; ++idx) {
+			if (cfg->pick_mode && (int)idx != picked)
+				continue;
 			MI_SNR_Res_t res = {0};
 			ret = MI_SNR_GetRes((MI_SNR_PAD_ID_e)p, idx, &res);
 			if (ret != 0)
 				continue;
-			if (cfg->want_mode.w) {
-				const CameraMode got = {res.output.width,
-					res.output.height, (uint16_t)res.maxFps};
-				if (camera_mode_find(&got, 1, cfg->want_mode) != 0)
+			if (cfg->pick_mode) {
+				const CameraMode got = offered[idx];
+				if (!camera_mode_size_ok(got, cfg->target_width,
+						cfg->target_height)) {
+					fprintf(stderr, "ERROR: venc.size %ux%u does not fit "
+						"the driver's %ux%u@%u mode for %u fps\n",
+						cfg->target_width, cfg->target_height,
+						got.w, got.h, got.max_fps, cfg->target_fps);
 					continue;
+				}
 			}
 
 			int cls = sensor_mode_score(&res,
@@ -354,10 +385,6 @@ static int find_best_mode(const SensorSelectConfig *cfg,
 	}
 
 	if (*best_index < 0) {
-		if (cfg->want_mode.w)
-			fprintf(stderr, "ERROR: sensor mode %ux%u@%u not offered by the driver\n",
-				cfg->want_mode.w, cfg->want_mode.h,
-				cfg->want_mode.max_fps);
 		fprintf(stderr, "ERROR: Failed to select sensor mode on any pad\n");
 		return -1;
 	}

@@ -1706,8 +1706,8 @@ TEST(record_ranges_are_checked) {
 }
 
 // venc.fps selects a sensor mode (drone/venc/camera_modes.c); venc.size
-// must have that mode's aspect ratio and fit inside it, or the loader
-// refuses it rather than booting into a crop the VPE cannot serve.
+// must fit the mode one of the known driver lineups picks for that fps, or
+// the loader refuses it rather than booting into a size no driver serves.
 TEST(venc_size_must_fit_the_mode_for_its_fps) {
   auto bad = [](const char* size, int fps) {
     const std::string body = std::string("[venc]\nsensor_bin = \"/etc/sensors/x.bin\"\nsize = \"") +
@@ -1718,13 +1718,14 @@ TEST(venc_size_must_fit_the_mode_for_its_fps) {
     std::filesystem::remove(path);
     return msg.find("venc.size") != std::string::npos;
   };
-  CHECK(bad("1920x1080", 100));  // larger than 1728x972
-  CHECK(bad("1472x816", 100));   // the old high-fps mode's aspect
-  CHECK(bad("1280x720", 120));   // 16:9 on the 1728x816 mode
+  CHECK(bad("1920x1080", 100));  // larger than both 1728x972 and 1472x816
   CHECK(bad("1920x1080", 91));
+  CHECK(bad("1728x972", 120));   // larger than both 120 fps modes
+  CHECK(bad("1440x1080", 60));   // 4:3 on a 16:9 mode
   CHECK(!bad("1280x720", 100));
   CHECK(!bad("1728x972", 100));
-  CHECK(!bad("1728x816", 120));
+  CHECK(!bad("1280x720", 120));  // the stock driver's 1472x816
+  CHECK(!bad("1728x816", 120));  // waybeam's 1728x816
   CHECK(!bad("1152x544", 110));
   CHECK(!bad("1280x720", 90));
   CHECK(!bad("1920x1080", 60));

@@ -1,17 +1,15 @@
 # Camera modes: frame rate, resolution and field of view
 
 The drone's IMX415 sensor offers a handful of readout modes, and `venc.fps`
-picks one. This page says which, what each costs in field of view, which
+picks one from the loaded driver's list. This page says which, what each costs in field of view, which
 `venc.size` values each can serve, and what the ground station has to do to
 show it smoothly.
 
-## The driver
+## The drivers
 
-The drone image loads waybeam_venc's star6e IMX415 driver,
-`sensor_imx415_star6e.ko` (from `../waybeam_venc/sensors/star6e/`, waybeam
-0c880d8), not OpenIPC's stock `sensor_imx415_mipi.ko`: `openipc-builder`'s
-`load_sigmastar` insmods it for `imx415`, and the stock module is left out
-of the image. It enumerates five modes:
+Two IMX415 drivers exist for the drone image, and maburd runs on either.
+waybeam_venc's star6e driver, `sensor_imx415_star6e.ko` (from
+`../waybeam_venc/sensors/star6e/`, waybeam 0c880d8), enumerates five modes:
 
 | idx | mode | readout | sensor window | share of the view (w × h) | aspect |
 |---|---|---|---|---|---|
@@ -21,20 +19,36 @@ of the image. It enumerates five modes:
 | 3 | 1728x972 @ ≤ 100 | 2x2 binned crop | 3456x1944, centred | 90 % × 90 % (81 % of the area) | 16:9 |
 | 4 | 1728x816 @ ≤ 120 | 2x2 binned crop | 3456x1632, centred | 90 % × 76 % | 2.12:1 |
 
-maburd finds the mode it wants in that list by output size and maxFps
-(`drone/venc/camera_modes.c`, `sensor_select.c`), never by index, and fails
-boot with `ERROR: sensor mode WxH@F not offered by the driver` when the
-loaded driver lacks it (the stock driver lacks modes 3 and 4). Check what
-is running with `grep Cur /proc/mi_modules/mi_sensor/mi_sensor0`.
+OpenIPC's stock `sensor_imx415_mipi.ko` enumerates four:
+
+| idx | mode | readout | aspect |
+|---|---|---|---|
+| 0 | 3840x2160 @ ≤ 30 | all pixels, not binned | 16:9 |
+| 1 | 2560x1440 @ ≤ 60 | crop, not binned | 16:9 |
+| 2 | 1920x1080 @ ≤ 90 | 2x2 binned | 16:9 |
+| 3 | 1472x816 @ ≤ 120 | 2x2 binned crop | 1.80:1 |
+
+maburd reads the loaded driver's list and picks from it by output size and
+maxFps (`camera_mode_pick` in `drone/venc/camera_modes.c`, called from
+`sensor_select.c`), never by index. Check what is running with
+`grep Cur /proc/mi_modules/mi_sensor/mi_sensor0`.
 
 ## Which mode `venc.fps` selects
 
-| `venc.fps` | mode | view |
+Without a recording above 1920x1080 the candidates are the modes of at most
+1920x1080 (the 2x2-binned ones; the larger modes below 4K are unbinned
+crops that narrow the view) whose maxFps reaches `venc.fps`; the largest
+wins, i.e. the widest view, then the lower ceiling.
+
+| `venc.fps` | waybeam driver | stock driver |
 |---|---|---|
-| 1–90 | 1920x1080 binned | full |
-| 91–100 | 1728x972 binned crop | 1.11x zoom |
-| 101–120 | 1728x816 binned crop | 1.11x wider, 1.32x taller zoom |
-| any, with `record.size` above 1920x1080 | 3840x2160 (the loader then requires `venc.fps` ≤ 30) | full |
+| 1–90 | 1920x1080 binned, full view | 1920x1080 binned, full view |
+| 91–100 | 1728x972 binned crop, 1.11x zoom | 1472x816 binned crop |
+| 101–120 | 1728x816 binned crop, 1.11x wider, 1.32x taller zoom | 1472x816 binned crop |
+| any, with `record.size` above 1920x1080 | 3840x2160 (the loader then requires `venc.fps` ≤ 30) | 3840x2160 |
+
+A driver that offers no mode for `venc.fps` fails the pipeline start with
+`ERROR: pad N offers no mode for F fps`.
 
 The full view stops at 90 fps because of the sensor, not the encoder: a
 frame is VMAX lines × the line time, full height binned needs VMAX ≥ 2250,
@@ -54,17 +68,24 @@ above 90 fps and the steer's ceiling clamp are in `docs/airtime-model.md`
 
 ## Sizes
 
-The VPE only scales the mode down; it never crops or upscales it. So
-`venc.size` must have the selected mode's aspect ratio and fit inside it
-(even, at least 320x180), or the loader refuses the config. Over the air,
-fps and size move together as the single `VENC_MODE` parameter
-(`docs/mavlink.md`):
+The pipeline crops the mode to `venc.size`'s aspect (the keep-aspect
+precrop) and the VPE scales that window down; it never upscales. So
+`venc.size` must be within 2 % of the picked mode's aspect (the precrop
+trims the rest of the view), fit inside the cropped window, and be even and
+at least 320x180. The config loader cannot see the driver: it accepts a size
+that the mode either known lineup picks for `venc.fps` can serve, and the
+pipeline refuses a size that the loaded driver's pick cannot serve with
+`ERROR: venc.size WxH does not fit the driver's WxH@F mode for F fps`
+(over the air the previous pipeline is restored). Over the air, fps and size
+move together as the single `VENC_MODE` parameter (`docs/mavlink.md`):
 
 - 1–90 fps: any 16:9 size up to 1920x1080 (1280x720, 1920x1080).
-- 91–100 fps: any 16:9 size up to 1728x972 (1280x720, 1728x972). 1920x1080
-  is refused (larger than the mode).
-- 101–120 fps: the 1728:816 shape up to 1728x816 (1728x816, 1152x544,
-  864x408). 1280x720 is refused (another aspect).
+- 91–100 fps: 16:9 up to 1728x972 on waybeam's driver; on the stock one any
+  size that fits 1472x816 after the precrop (1280x720: 1.5 % trimmed off the
+  sides, 1450x816 scaled down). 1920x1080 is refused on both.
+- 101–120 fps: waybeam's 1728:816 shape up to 1728x816 (1728x816, 1152x544,
+  864x408), where 1280x720 is refused (16 % off its aspect); on the stock
+  driver 1280x720 as above.
 
 Encoding the mode's own size keeps all its detail but costs encoder time:
 1728x972 at 100 fps reads 158 % of the H.265 engine's rated macroblock rate
@@ -92,7 +113,7 @@ the rates match but the lock still gives up (the steer cannot reach the
 panel, e.g. a panel a hair faster than a mode's ceiling) the fps cell turns
 caution without the `/`.
 
-A picture whose aspect differs from the panel (mode 4 on 16:9) is
+A picture whose aspect differs from the panel (waybeam's 1728x816 on 16:9) is
 letterboxed with black bars on the screen, and in the burned DVR when its
 size (`dvr.burned.size`) has another aspect, never stretched
 (`gs/player/src/fit_rect.h`). The burned DVR's default size is the
