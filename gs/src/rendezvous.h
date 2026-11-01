@@ -26,6 +26,8 @@ struct VrxRzConfig {
   // NEW session on the drone (its seq32 restarts), so the nonce is never
   // derived from config. Tests and the hop-inject self-test pin one.
   uint32_t nonce = 0;
+  // Proposed to the drone in Disc.op_width (DISC_CAP_WIDTH).
+  uint8_t width = 20;
 };
 
 class VrxRendezvous {

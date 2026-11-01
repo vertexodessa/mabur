@@ -37,6 +37,8 @@ struct VrxCfg {
   // session, rendezvous.h). Only a replay pins one, so its sent frames (DISC
   // nonce, RCF tags) are reproducible -- the native/WASM parity trace.
   uint32_t rz_nonce = 0;
+  // The GS receiver's width, proposed in every DISC (DISC_CAP_WIDTH).
+  uint8_t width = 20;
 };
 
 // A DISC proposes the channel it is sent on: the GS builds one DISC per tick proposing op and fans it to
