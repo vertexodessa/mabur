@@ -98,7 +98,7 @@ static mabur::paramval::Value sample_value(size_t idx) {
       v.f = 1.5f;
       break;
     case mabur::cfgparam::Type::Str:
-      v.s = (idx == mabur::cfgparam::kVencModeRow) ? "60@1920x1080" : "0x0";
+      v.s = (idx == mabur::cfgparam::kVencModeRow) ? "60@1920x1080/binned" : "0x0";
       break;
   }
   return v;
@@ -151,7 +151,7 @@ TEST(twelve_values_complete_the_list) {
   for (size_t i = 0; i < mabur::cfgparam::kCount; ++i) feed_row(r.c, i, 1001);
   CHECK(r.c.state().list == ParamListState::Complete);
   for (size_t i = 0; i < mabur::cfgparam::kCount; ++i) CHECK(r.c.state().rows[i].have_value);
-  CHECK(r.c.state().rows[mabur::cfgparam::kVencModeRow].value.s == "60@1920x1080");
+  CHECK(r.c.state().rows[mabur::cfgparam::kVencModeRow].value.s == "60@1920x1080/binned");
   CHECK(!r.c.state().table_mismatch);
 }
 
@@ -198,7 +198,7 @@ TEST(list_with_wrong_count_flags_mismatch) {
   feed_row(r.c, mabur::cfgparam::kVencModeRow, 1001, /*count=*/13);
   CHECK(r.c.state().table_mismatch);
   CHECK(r.c.state().rows[mabur::cfgparam::kVencModeRow].have_value);
-  CHECK(r.c.state().rows[mabur::cfgparam::kVencModeRow].value.s == "60@1920x1080");
+  CHECK(r.c.state().rows[mabur::cfgparam::kVencModeRow].value.s == "60@1920x1080/binned");
 }
 
 TEST(unknown_id_is_dropped_and_counted) {
@@ -621,7 +621,7 @@ TEST(lost_accepted_is_recovered_by_the_reread) {
   Rig r;
   link_and_complete_list(r, 1000);
   std::string why;
-  REQUIRE(r.c.set(2, "120@1280x720", 2000, &why));
+  REQUIRE(r.c.set(2, "120@1280x720/binned", 2000, &why));
 
   auto str_wire = [](const char* text, char wire[128]) {
     mabur::paramval::Value v{mabur::cfgparam::Type::Str};
@@ -629,8 +629,8 @@ TEST(lost_accepted_is_recovered_by_the_reread) {
     mabur::paramval::encode_wire(v, wire);
   };
   char old_wire[128], new_wire[128];
-  str_wire("90@1920x1080", old_wire);
-  str_wire("120@1280x720", new_wire);
+  str_wire("90@1920x1080/binned", old_wire);
+  str_wire("120@1280x720/binned", new_wire);
   Bytes ip = ack_pkt("VENC_MODE", 11, old_wire, PARAM_ACK_IN_PROGRESS);
   r.c.on_packet(ip.data(), ip.size(), 2100);
   r.sent.clear();
@@ -670,11 +670,11 @@ TEST(accepted_rebuild_row_relists) {
   Rig r;
   link_and_complete_list(r, 1000);
   std::string why;
-  REQUIRE(r.c.set(2, "90@1920x1080", 2000, &why));
+  REQUIRE(r.c.set(2, "90@1920x1080/binned", 2000, &why));
   r.sent.clear();
 
   mabur::paramval::Value v{mabur::cfgparam::Type::Str};
-  v.s = "90@1920x1080";
+  v.s = "90@1920x1080/binned";
   char wire[128];
   mabur::paramval::encode_wire(v, wire);
   Bytes a = ack_pkt("VENC_MODE", 11, wire, PARAM_ACK_ACCEPTED);
@@ -697,9 +697,9 @@ TEST(relist_rereads_rows_that_did_not_answer_this_round) {
   Rig r;
   link_and_complete_list(r, 1000);
   std::string why;
-  REQUIRE(r.c.set(2, "120@1728x816", 2000, &why));
+  REQUIRE(r.c.set(2, "120@1728x816/binned", 2000, &why));
   mabur::paramval::Value v{mabur::cfgparam::Type::Str};
-  v.s = "120@1728x816";
+  v.s = "120@1728x816/binned";
   char wire[128];
   mabur::paramval::encode_wire(v, wire);
   Bytes a = ack_pkt("VENC_MODE", 11, wire, PARAM_ACK_ACCEPTED);

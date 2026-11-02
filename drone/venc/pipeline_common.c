@@ -24,6 +24,7 @@ SensorSelectConfig pipeline_common_build_sensor_select_config(int forced_pad,
 
 	cfg.forced_pad = forced_pad;
 	cfg.pick_mode = pick_mode;
+	cfg.binning = 1;
 	cfg.rec_width = rec_width;
 	cfg.rec_height = rec_height;
 	cfg.target_width = target_width;

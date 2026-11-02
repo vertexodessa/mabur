@@ -35,8 +35,9 @@
  * excess above resolution fit, so at 60 fps it would take the 2560x1440@60
  * non-binned crop (a 1.5x narrower view) over the 2x2-binned full-view
  * 1920x1080@90. camera_mode_pick() chooses from the driver's list by
- * geometry and ceiling instead (the widest binned mode that reaches
- * venc.fps, camera_modes.h, docs/camera-modes.md), and a venc.size that
+ * geometry and ceiling instead (the widest mode of venc.binning's readout
+ * that reaches venc.fps, camera_modes.h, docs/camera-modes.md; a driver
+ * with no native mode at that rate fails the start), and a venc.size that
  * does not fit that mode fails the start rather than running another
  * geometry. Verify on the device with
  * `grep Cur /proc/mi_modules/mi_sensor/mi_sensor0`. */
@@ -996,6 +997,7 @@ static int prepare_pipeline_config(const VencCfg *cfg,
 			pconf->sensor_width,
 			pconf->sensor_height, pconf->sensor_framerate);
 	}
+	pconf->sensor_cfg.binning = cfg->binning ? 1 : 0;
 	pconf->sensor_cfg.image_mirror = cfg->mirror ? 1 : 0;
 	pconf->sensor_cfg.image_flip   = cfg->flip ? 1 : 0;
 	/* IMX415/IMX335 high-FPS register hook: MI_SNR_CustFunction(pad,
