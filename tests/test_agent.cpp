@@ -3399,8 +3399,10 @@ TEST(parks_on_start_channel_else_first_member) {
   CHECK(first.channel() == 136);
   RcAgent remembered(cfg, a, nullptr, 161);
   CHECK(remembered.channel() == 161);
-  RcAgent bad(cfg, a, nullptr, 112);       // not a member: caller should not pass this, but never trust it
+  RcAgent bad(cfg, a, nullptr, 68);        // off the 5 GHz grid: caller should not pass this, but never trust it
   CHECK(bad.channel() == 136);
+  RcAgent off_set(cfg, a, nullptr, 112);   // Palianytsia: a grid channel outside the set (the GS moved us there)
+  CHECK(off_set.channel() == 112);
 }
 
 TEST(disc_proposing_a_non_member_is_acked_with_the_current_channel) {
@@ -3408,7 +3410,7 @@ TEST(disc_proposing_a_non_member_is_acked_with_the_current_channel) {
   MockActuator act;
   RcAgent agent(cfg, act);
   agent.tick(0, RadioHealth{});
-  auto disc = make_disc_wire(kVrx, /*op_channel=*/112, 20, 0, 1);   // 112 is not in {136,149,161}
+  auto disc = make_disc_wire(kVrx, /*op_channel=*/68, 20, 0, 1);   // 68 is off the 5 GHz grid
   agent.on_rc_frame(disc.data(), disc.size(), 100);
   REQUIRE(act.controls.size() == 1);
   auto ack = parse_disc_ack(act.controls[0].data(), act.controls[0].size());
@@ -3478,13 +3480,39 @@ TEST(hop_order_to_a_non_member_is_ignored_and_not_reevaluated) {
   uint64_t t = 100;
   link_agent(agent, act, cfg, 136, t);
   const size_t n = act.retunes.size();
-  t = send_rcf_with_hop(agent, act, t + 20, /*hop_ch=*/112, /*epoch=*/1);   // non-member
+  t = send_rcf_with_hop(agent, act, t + 20, /*hop_ch=*/68, /*epoch=*/1);    // off the grid
   CHECK(act.retunes.size() == n);
-  t = send_rcf_with_hop(agent, act, t + 20, 112, 1);                        // same pair again
+  t = send_rcf_with_hop(agent, act, t + 20, 68, 1);                         // same pair again
   CHECK(act.retunes.size() == n);
   t = send_rcf_with_hop(agent, act, t + 20, 161, 2);                        // a member
   REQUIRE(act.retunes.size() == n + 1);
   CHECK(act.retunes.back() == 161 && act.retune_reasons.back() == "hop");
+}
+
+// Palianytsia: the GS may put the link on any 5 GHz grid channel; the drone
+// follows a hop or a DISC there although its own set does not list it.
+TEST(hop_and_disc_to_a_grid_channel_outside_the_set_are_followed) {
+  Config cfg = make_cfg();                 // channels {136, 149, 161}
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  uint64_t t = 100;
+  link_agent(agent, act, cfg, 136, t);
+  const size_t n = act.retunes.size();
+  t = send_rcf_with_hop(agent, act, t + 20, /*hop_ch=*/36, /*epoch=*/1);
+  REQUIRE(act.retunes.size() == n + 1);
+  CHECK(act.retunes.back() == 36 && agent.channel() == 36);
+  t = send_rcf(agent, act, t + 20);         // heard on 36: confirmed, remembered
+  CHECK(!act.remembered.empty() && act.remembered.back() == 36);
+
+  MockActuator act2;
+  RcAgent fresh(cfg, act2);
+  fresh.tick(0, RadioHealth{});
+  auto disc = make_disc_wire(kVrx, /*op_channel=*/165, 20, 0, 1);
+  fresh.on_rc_frame(disc.data(), disc.size(), 100);
+  REQUIRE(act2.controls.size() == 1);
+  auto ack = parse_disc_ack(act2.controls[0].data(), act2.controls[0].size());
+  REQUIRE(ack.has_value());
+  CHECK(ack->agreed_channel == 165);
 }
 
 // ---- MAVLink hot-reload: RcAgent's live knobs and the two notifications --
