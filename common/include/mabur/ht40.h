@@ -40,4 +40,19 @@ constexpr uint8_t ht40_pair_other(uint8_t ch) {
 static_assert(ht40_pair_other(136) == 132 && ht40_pair_other(132) == 136, "132+136");
 static_assert(ht40_pair_other(149) == 153 && ht40_pair_other(165) == 0, "149+153 / no pair");
 
+// A 20 MHz channel of the 5 GHz grid the link can sit on (UNII-1/2/2e/3:
+// 36-64, 100-144, 149-165, every fourth). Palianytsia's GS lets the
+// operator put the link on any of them, so the drone follows a hop or a
+// DISC to one outside its own radio.channels (which stays its boot set).
+constexpr bool channel_5g(uint8_t ch) {
+  if (ch >= 36 && ch <= 64) return (ch - 36) % 4 == 0;
+  if (ch >= 100 && ch <= 144) return (ch - 100) % 4 == 0;
+  if (ch >= 149 && ch <= 165) return (ch - 149) % 4 == 0;
+  return false;
+}
+
+static_assert(channel_5g(36) && channel_5g(64) && channel_5g(100) && channel_5g(144), "grid");
+static_assert(channel_5g(149) && channel_5g(161) && channel_5g(165), "UNII-3");
+static_assert(!channel_5g(68) && !channel_5g(96) && !channel_5g(158) && !channel_5g(6), "off grid");
+
 }  // namespace mabur
