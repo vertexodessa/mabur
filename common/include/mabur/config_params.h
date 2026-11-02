@@ -54,6 +54,11 @@ inline constexpr Row kTable[] = {
      "Lower bitrate and frame rate while disarmed to keep the VTX cool; needs msp.enable for arm state"},
     {"MSP_ENABLE", "msp", "enable", Type::Bool, Apply::Reprogram,
      "Flight-controller link for the OSD and arm state"},  // the MSP thread starts or stops
+    // Appended, not grouped with the radio rows: a row's index is its wire
+    // param_index, and a GS built against the older table keeps reading the
+    // rows it knows at the same places.
+    {"RADIO_PWR_MODE", "radio", "power_mode", Type::Str, Apply::Reprogram,
+     "TX power table: offset flies the calibrated walls, none the chip's own; none undoes a calibration"},  // the plans are replaced in place
 };
 inline constexpr size_t kCount = sizeof(kTable) / sizeof(kTable[0]);
 inline constexpr int kMaxIdLen = 16;

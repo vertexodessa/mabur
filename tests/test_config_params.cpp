@@ -4,8 +4,8 @@
 #include <set>
 #include <string>
 using namespace mabur::cfgparam;
-TEST(twelve_rows_in_spec_order) {
-  REQUIRE(kCount == 12);
+TEST(thirteen_rows_in_spec_order) {
+  REQUIRE(kCount == 13);
   CHECK(!std::strcmp(kTable[0].id, "RADIO_WALL_MARGN") && !std::strcmp(kTable[0].section, "radio") && !std::strcmp(kTable[0].key, "wall_margin_db") && kTable[0].type == Type::Real32);
   CHECK(!std::strcmp(kTable[1].id, "RADIO_LDPC")     && kTable[1].type == Type::Bool);
   CHECK(!std::strcmp(kTable[2].id, "VENC_MODE")      && kTable[2].type == Type::Str);
@@ -18,6 +18,7 @@ TEST(twelve_rows_in_spec_order) {
   CHECK(!std::strcmp(kTable[9].id, "REC_SIZE")       && kTable[9].type == Type::Str);
   CHECK(!std::strcmp(kTable[10].id, "LOWPWR_ENABLE") && !std::strcmp(kTable[10].section, "low_power"));
   CHECK(!std::strcmp(kTable[11].id, "MSP_ENABLE")    && !std::strcmp(kTable[11].section, "msp"));
+  CHECK(!std::strcmp(kTable[12].id, "RADIO_PWR_MODE") && !std::strcmp(kTable[12].key, "power_mode") && kTable[12].type == Type::Str);
   CHECK(kVencModeRow == 2);
   CHECK(find("VENC_MODE") == 2);
   CHECK(find("VENC_FPS") == -1);

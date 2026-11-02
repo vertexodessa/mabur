@@ -53,6 +53,7 @@ Value acc_rec_size(const Config& c) {
 }
 Value acc_lowpwr_enable(const Config& c) { return Value{Type::Bool, c.low_power.enable}; }
 Value acc_msp_enable(const Config& c) { return Value{Type::Bool, c.msp.enable}; }
+Value acc_power_mode(const Config& c) { return Value{Type::Str, false, 0, 0, c.radio.power_mode}; }
 
 using Accessor = Value (*)(const Config&);
 
@@ -72,6 +73,7 @@ constexpr Accessor kAccessors[] = {
     acc_rec_size,          // REC_SIZE
     acc_lowpwr_enable,     // LOWPWR_ENABLE
     acc_msp_enable,        // MSP_ENABLE
+    acc_power_mode,        // RADIO_PWR_MODE
 };
 static_assert(sizeof(kAccessors) / sizeof(kAccessors[0]) == cfgparam::kCount,
               "mav_params accessor table must have one entry per cfgparam::kTable row");

@@ -248,7 +248,7 @@ bool ConfigApplier::dispatch(size_t row_idx, const std::string& field, const Con
       hooks_.set_knobs(cand);
       return true;
     case ConfigApplyPath::Reprogram:
-      if (is(row, "radio", "wall_margin_db")) {
+      if (is(row, "radio", "wall_margin_db") || is(row, "radio", "power_mode")) {
         std::string err;
         if (hooks_.power_plan(cand, &err)) return true;
         *reason = "power plan refused: " + err;

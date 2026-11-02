@@ -186,10 +186,11 @@ constexpr size_t kWallMargin = 0, kVencMode = 2, kVencSlices = 3, kBitrateMax = 
 
 TEST(every_row_has_the_path_from_the_table) {
   using P = ConfigApplyPath;
-  const ConfigApplyPath want[12] = {P::Reprogram, P::Reprogram, P::Rebuild, P::Rebuild,
+  const ConfigApplyPath want[13] = {P::Reprogram, P::Reprogram, P::Rebuild, P::Rebuild,
                               P::Knob,      P::Knob,      P::Rebuild, P::Rebuild,
-                              P::Rebuild,   P::Rebuild,   P::Knob,    P::Reprogram};
-  REQUIRE(cfgparam::kCount == 12);
+                              P::Rebuild,   P::Rebuild,   P::Knob,    P::Reprogram,
+                              P::Reprogram};
+  REQUIRE(cfgparam::kCount == 13);
   for (size_t i = 0; i < cfgparam::kCount; ++i) CHECK(apply_path_for(i) == want[i]);
 }
 
@@ -379,6 +380,30 @@ TEST(wall_margin_reprogram_publishes) {
   CHECK(g.f.order == std::vector<std::string>{"power_plan"});
   CHECK(g.a.live().radio.wall_margin_db == 2.0);
   CHECK(load_config(g.path()).radio.wall_margin_db == 2.0);
+}
+
+// RADIO_PWR_MODE: "offset" -> "none" goes through the power plan hook with
+// the candidate and is published; a value the loader refuses never reaches
+// the hook or the file.
+TEST(power_mode_reprogram_publishes_and_refuses_a_bad_value) {
+  Rig g;
+  std::string t = slurp(g.path());
+  const std::string none = "power_mode = \"none\"";
+  const size_t at = t.find(none);
+  REQUIRE(at != npos);
+  t.replace(at, none.size(), "power_mode = \"offset\"");
+  spit(g.path(), t);
+  const size_t row = cfgparam::kCount - 1;
+  REQUIRE(std::string(cfgparam::kTable[row].id) == "RADIO_PWR_MODE");
+  ConfigApplyResult r = apply(g.a, row, Value{Type::Str, false, 0, 0, "none"});
+  CHECK(r.ok && r.path == ConfigApplyPath::Reprogram);
+  CHECK(g.f.order == std::vector<std::string>{"power_plan"});
+  CHECK(g.f.power_plan.size() == 1 && g.f.power_plan[0].radio.power_mode == "none");
+  CHECK(load_config(g.path()).radio.power_mode == "none");
+
+  const std::string before = slurp(g.path());
+  r = apply(g.a, row, Value{Type::Str, false, 0, 0, "max"});
+  CHECK(!r.ok && g.f.power_plan.size() == 1 && slurp(g.path()) == before);
 }
 
 TEST(ldpc_calls_ldpc_hook_with_candidate) {
