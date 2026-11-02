@@ -653,7 +653,10 @@ class RcAgent {
   rc::DiscAck make_disc_ack(uint32_t vrx_nonce, uint32_t vtx_nonce, uint8_t flags, uint16_t seq,
                             uint8_t agreed, uint8_t agreed_w) const;
 
-  bool member_(uint8_t ch) const { return mabur::channel_set_member(cfg_.radio.channels, ch); }
+  // Palianytsia: any 5 GHz grid channel, not only radio.channels (mabur::channel_5g).
+  bool member_(uint8_t ch) const {
+    return mabur::channel_set_member(cfg_.radio.channels, ch) || mabur::channel_5g(ch);
+  }
 };
 
 }  // namespace mabur
