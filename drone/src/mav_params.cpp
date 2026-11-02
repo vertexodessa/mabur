@@ -55,6 +55,7 @@ Value acc_lowpwr_enable(const Config& c) { return Value{Type::Bool, c.low_power.
 Value acc_msp_enable(const Config& c) { return Value{Type::Bool, c.msp.enable}; }
 Value acc_venc_mirror(const Config& c) { return Value{Type::Bool, c.venc.core.mirror}; }
 Value acc_venc_flip(const Config& c) { return Value{Type::Bool, c.venc.core.flip}; }
+Value acc_power_mode(const Config& c) { return Value{Type::Str, false, 0, 0, c.radio.power_mode}; }
 
 using Accessor = Value (*)(const Config&);
 
@@ -76,6 +77,7 @@ constexpr Accessor kAccessors[] = {
     acc_msp_enable,        // MSP_ENABLE
     acc_venc_mirror,       // VENC_MIRROR
     acc_venc_flip,         // VENC_FLIP
+    acc_power_mode,        // RADIO_PWR_MODE
 };
 static_assert(sizeof(kAccessors) / sizeof(kAccessors[0]) == cfgparam::kCount,
               "mav_params accessor table must have one entry per cfgparam::kTable row");

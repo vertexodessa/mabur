@@ -80,7 +80,7 @@ TEST(acc_venc_mode_spells_the_readout) {
 TEST(read_rejects_idx_out_of_range) {
   Config c = load_config(bundle_path());
   Value v;
-  CHECK(!read(c, 14, &v));                    // cfgparam::kCount == 14
+  CHECK(!read(c, cfgparam::kCount, &v));
   CHECK(!read(c, static_cast<size_t>(-1), &v));
 }
 

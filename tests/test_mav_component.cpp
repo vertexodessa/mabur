@@ -360,7 +360,7 @@ TEST(read_by_index_and_by_id) {
 
   feed(c, read_msg("NOPE", -1));
   CHECK(drain(c).empty());
-  feed(c, read_msg("", 14));   // one past the table
+  feed(c, read_msg("", static_cast<int16_t>(cfgparam::kCount)));   // one past the table
   CHECK(drain(c).empty());
   feed(c, read_msg("", 32767));
   CHECK(drain(c).empty());
@@ -580,6 +580,7 @@ TEST(every_row_sets_reads_back_and_restores) {
       {"MSP_ENABLE", Value{Type::Bool, false}},
       {"VENC_MIRROR", Value{Type::Bool, true}},
       {"VENC_FLIP", Value{Type::Bool, true}},
+      {"RADIO_PWR_MODE", Value{Type::Str, false, 0, 0, "offset"}},
   };
   static_assert(sizeof(cases) / sizeof(cases[0]) == cfgparam::kCount, "one case per row");
   ScratchBundle b;
