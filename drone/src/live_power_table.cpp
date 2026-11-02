@@ -34,6 +34,9 @@ bool LivePowerTable::replace_unless_cal(WidthPlans p, uint8_t bw, bool* refused_
   *refused_cal = cal_active->load(std::memory_order_relaxed);
   if (*refused_cal) return false;
   plans_ = std::move(p);
+  // Without this, offset -> none (RADIO_PWR_MODE) would find no plan and a
+  // clean table and leave the old walls' diffs in the chip.
+  dirty_ = true;
   return write_locked(bw, Write{});
 }
 
