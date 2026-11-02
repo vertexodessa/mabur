@@ -223,6 +223,22 @@ TEST(replace_unless_cal_refuses_during_calibration) {
   CHECK((r.dev.calls == Calls{"gate", diffs_of(only20(), 20)}));
 }
 
+// RADIO_PWR_MODE "none": the param replaces the walls with no plans, and
+// the chip's own table must go back even though the walls' write left the
+// table clean.
+TEST(replace_unless_cal_with_no_plans_puts_the_efuse_table_back) {
+  Rig r;
+  REQUIRE(r.t.replace(both(), 20, true, false));
+  r.dev.clear();
+  bool refused = true;
+  CHECK(r.t.replace_unless_cal(WidthPlans{}, 20, &refused));
+  CHECK(!refused);
+  CHECK((r.dev.calls == Calls{"gate", "diffs efuse"}));
+  r.dev.clear();
+  r.t.follow(20);
+  CHECK(r.dev.calls.empty());
+}
+
 TEST(a_refused_write_is_reported_and_not_retried) {
   Rig r;
   r.dev.refuse_diffs = true;
