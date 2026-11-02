@@ -29,8 +29,9 @@ int round_to_100(double v) { return static_cast<int>(std::lround(v / 100.0) * 10
 
 RcAgent::RcAgent(const Config& cfg, Actuator& act, OvOverride* ovr, uint8_t start_ch)
     : cfg_(cfg), act_(act), ovr_(ovr),
-      channel_(mabur::channel_set_member(cfg.radio.channels, start_ch) ? start_ch
-                                                                        : cfg.radio.channels.front()),
+      channel_(mabur::channel_set_member(cfg.radio.channels, start_ch) || mabur::channel_5g(start_ch)
+                   ? start_ch
+                   : cfg.radio.channels.front()),
       width_(static_cast<uint8_t>(cfg.radio.width)) {
   // Seed the live knobs from boot config -- a daemon that never calls
   // set_live_knobs reads exactly what cfg_ would have given it.
