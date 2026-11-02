@@ -340,11 +340,12 @@ static int find_best_mode(const SensorSelectConfig *cfg,
 				}
 				offered[n_offered++] = m;
 			}
-			picked = camera_mode_pick(offered, n_offered,
+			picked = camera_mode_pick(offered, n_offered, cfg->binning,
 				cfg->target_fps, cfg->rec_width, cfg->rec_height);
 			if (picked < 0) {
-				fprintf(stderr, "ERROR: pad %d offers no mode for %u fps\n",
-					p, cfg->target_fps);
+				fprintf(stderr, "ERROR: pad %d offers no %s mode for %u fps\n",
+					p, cfg->binning ? "binned" : "native",
+					cfg->target_fps);
 				continue;
 			}
 		}

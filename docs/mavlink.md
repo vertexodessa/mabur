@@ -2,8 +2,8 @@
 
 The radio link carries MAVLink 2 packets in both directions inside one RC
 frame type, `T_MAV`. The first tenant is a parameter component on the drone
-that serves twelve parameters over thirteen keys of `/etc/mabur.toml`
-(`VENC_MODE` spells two) as MAVLink extended parameters (`PARAM_EXT_*`): a ground end holding the link key can list,
+that serves twelve parameters over fourteen keys of `/etc/mabur.toml`
+(`VENC_MODE` spells three) as MAVLink extended parameters (`PARAM_EXT_*`): a ground end holding the link key can list,
 read and set them while linked. A set applies to the running `maburd`
 before it is published to the file — a knob takes effect on `RcAgent`'s
 next tick, a reprogram takes effect in place, a rebuild restarts the
@@ -150,8 +150,9 @@ agent and TX threads.
     non-finite REAL32, or a CUSTOM value with no NUL in its 128 bytes or a
     non-printable byte: `PARAM_ACK_VALUE_UNSUPPORTED` with the current
     value; there is no cross-type coercion;
-  - a `VENC_MODE` value that is not `<fps>@<W>x<H>` — each number a run
-    of 1 to 6 digits, nothing before or after:
+  - a `VENC_MODE` value that is not `<fps>@<W>x<H>/binned` or
+    `<fps>@<W>x<H>/native` — each number a run of 1 to 6 digits, nothing
+    before or after (the old suffix-less shape included):
     `PARAM_ACK_VALUE_UNSUPPORTED` with the current value. A well-formed
     value out of range is the loader's `FAILED`, below;
   - a set to the value the file already holds writes nothing and answers
@@ -290,7 +291,7 @@ quoted string).
 |---|---|---|---|---|---|
 | 0 | `RADIO_WALL_MARGN` | `radio.wall_margin_db` | Real32 | reprogram | Safety margin below the calibrated TX-power walls; raise to lower TX power |
 | 1 | `RADIO_LDPC` | `radio.ldpc` | Bool | reprogram | LDPC coding on every frame; turn off only for a ground card that cannot decode it |
-| 2 | `VENC_MODE` | `venc.fps` + `venc.size` | Str | rebuild | Camera frame rate and encoder size, `<fps>@<WxH>`; the rate picks the sensor's field-of-view mode and the size must fit it |
+| 2 | `VENC_MODE` | `venc.fps` + `venc.size` + `venc.binning` | Str | rebuild | Camera frame rate, encoder size and sensor readout, `<fps>@<WxH>/binned\|native`; the rate and readout pick the sensor mode and the size must fit it (`docs/camera-modes.md`) |
 | 3 | `VENC_SLICES` | `venc.slices` | Int32 | rebuild | H.265 row slices on the link channel; 1 disables slice salvage |
 | 4 | `ENC_BITRATE_MAX` | `encoder.bitrate_max_kbps` | Int32 | knob | Bitrate ceiling, kbps |
 | 5 | `ENC_AIRTIME` | `encoder.airtime_budget` | Real32 | knob | Share of the link's real capacity the video may use |
@@ -320,13 +321,22 @@ nothing; send the other key first. The rules the loader enforces:
 - `REC_FPS` ≤ `VENC_MODE`'s fps (while the recorder is on): lower
   `REC_FPS` before lowering `VENC_MODE`'s fps; raise `VENC_MODE`'s fps
   before raising `REC_FPS`.
-- `REC_SIZE` above 1920x1080 needs `VENC_MODE`'s fps ≤ 30 first.
+- `REC_SIZE` above 1920x1080 and larger than the sensor mode `VENC_MODE`
+  picks needs `VENC_MODE`'s fps ≤ 30 first (the 4K mode).
+- `VENC_MODE` native above 100 fps is refused (`venc.fps: above 100 needs
+  venc.binning = true`).
 - `LOWPWR_ENABLE = 1` needs `MSP_ENABLE = 1` first; `MSP_ENABLE = 0` needs
   `LOWPWR_ENABLE = 0` first.
-- A `VENC_MODE` set that changes the sensor mode's aspect, while the
-  recorder is on with an explicit `record.size`, also rewrites
-  `record.size` to the new venc size in the same candidate; `record.fps`
-  never follows.
+- A `VENC_MODE` set that changes the sensor mode's aspect, or above 30 fps
+  moves to a mode the explicit recording no longer fits (it would need the
+  4K mode), while the recorder is on with an explicit `record.size`, also
+  rewrites `record.size` to the new venc size in the same candidate;
+  `record.fps` never follows.
+- An `/etc/mabur.toml` without a `binning` line under `[venc]` loads (the
+  default is `true`), but every `VENC_MODE` set answers `FAILED` with
+  `venc.binning: key not found`: add `binning = true` once. The format
+  change is a flag day: the drone and every ground end that sets
+  `VENC_MODE` (web GS, Palianytsia) move together.
 
 Two loader rules involve keys the table does not expose:
 

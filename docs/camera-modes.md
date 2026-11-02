@@ -1,20 +1,35 @@
 # Camera modes: frame rate, resolution and field of view
 
 The drone's IMX415 sensor offers a handful of readout modes, and `venc.fps`
-picks one from the loaded driver's list. This page says which, what each costs in field of view, which
+with `venc.binning` picks one from the loaded driver's list. This page says which, what each costs in field of view, which
 `venc.size` values each can serve, and what the ground station has to do to
 show it smoothly.
 
 ## The drivers
 
-Two IMX415 drivers exist for the drone image, and maburd runs on either.
-waybeam_venc's star6e driver, `sensor_imx415_star6e.ko` (from
-`../waybeam_venc/sensors/star6e/`, waybeam 0c880d8), enumerates five modes:
+Three IMX415 drivers exist for the drone image, and maburd runs on any of
+them. waybeam_venc's star6e driver, `sensor_imx415_star6e.ko`, six-mode
+build (waybeam_venc b723e91, the prebuilt module gilankpam/openipc-builder#4
+ships; md5 `9ad7d1ac86ccf3817cb563ae858c1e68`), enumerates:
+
+| idx | mode | readout | share of the view (w × h) |
+|---|---|---|---|
+| 0 | 3840x2160 @ ≤ 33 | all pixels, not binned | 100 % × 100 % |
+| 1 | 2944x1656 @ ≤ 60 | native window | ≈ 77 %, 1.29x zoom |
+| 2 | 1920x1080 @ ≤ 90 | 2x2 binned | 100 % × 100 % |
+| 3 | 2304x1296 @ ≤ 100 | native window | ≈ 61 %, 1.64x zoom |
+| 4 | 1728x972 @ ≤ 100 | 2x2 binned crop | 90 % × 90 % |
+| 5 | 1728x816 @ ≤ 120 | 2x2 binned crop | 90 % × 76 % |
+
+The views of modes 1 and 3 are upstream's bench measurements
+(`docs/findings/2026-11-02-native-readout-bench.md`). The earlier five-mode
+build (from `../waybeam_venc/sensors/star6e/`, waybeam 0c880d8) has no
+2304x1296 and a narrower 60 fps window:
 
 | idx | mode | readout | sensor window | share of the view (w × h) | aspect |
 |---|---|---|---|---|---|
 | 0 | 3840x2160 @ ≤ 33 | all pixels, not binned | 3840x2160 | 100 % × 100 % | 16:9 |
-| 1 | 2816x1584 @ ≤ 60 | crop, not binned | 2952x1656 → 2816x1584 | — (unused) | 16:9 |
+| 1 | 2816x1584 @ ≤ 60 | crop, not binned | 2952x1656 → 2816x1584 | native window | 16:9 |
 | 2 | 1920x1080 @ ≤ 90 | 2x2 binned | 3840x2160 | 100 % × 100 % | 16:9 |
 | 3 | 1728x972 @ ≤ 100 | 2x2 binned crop | 3456x1944, centred | 90 % × 90 % (81 % of the area) | 16:9 |
 | 4 | 1728x816 @ ≤ 120 | 2x2 binned crop | 3456x1632, centred | 90 % × 76 % | 2.12:1 |
@@ -33,22 +48,38 @@ maxFps (`camera_mode_pick` in `drone/venc/camera_modes.c`, called from
 `sensor_select.c`), never by index. Check what is running with
 `grep Cur /proc/mi_modules/mi_sensor/mi_sensor0`.
 
-## Which mode `venc.fps` selects
+## Which mode `venc.fps` and `venc.binning` select
 
-Without a recording above 1920x1080 the candidates are the modes of at most
-1920x1080 (the 2x2-binned ones; the larger modes below 4K are unbinned
-crops that narrow the view) whose maxFps reaches `venc.fps`; the largest
-wins, i.e. the widest view, then the lower ceiling.
+`venc.binning` picks the readout. `true` (the default): the candidates are
+the modes of at most 1920x1080, the 2x2-binned ones. `false` (native): the
+modes larger than 1920x1080 and smaller than 4K, which read 1:1 pixels from
+a window of the sensor: sharper per output pixel, a zoomed view. Among the
+candidates whose maxFps reaches `venc.fps` the largest wins, i.e. the
+widest view, then the lower ceiling.
 
-| `venc.fps` | waybeam driver | stock driver |
-|---|---|---|
-| 1–90 | 1920x1080 binned, full view | 1920x1080 binned, full view |
-| 91–100 | 1728x972 binned crop, 1.11x zoom | 1472x816 binned crop |
-| 101–120 | 1728x816 binned crop, 1.11x wider, 1.32x taller zoom | 1472x816 binned crop |
-| any, with `record.size` above 1920x1080 | 3840x2160 (the loader then requires `venc.fps` ≤ 30) | 3840x2160 |
+| `venc.fps` | readout | waybeam six-mode | waybeam five-mode | stock driver |
+|---|---|---|---|---|
+| 1–90 | binned | 1920x1080, full view | 1920x1080 | 1920x1080 |
+| 91–100 | binned | 1728x972 crop, 1.11x zoom | 1728x972 | 1472x816 crop |
+| 101–120 | binned | 1728x816 crop, 1.11x wider, 1.32x taller zoom | 1728x816 | 1472x816 crop |
+| 1–60 | native | 2944x1656, 1.29x | 2816x1584 | 2560x1440, 1.5x |
+| 61–100 | native | 2304x1296, 1.64x | none | none |
+| 101–120 | native | none: the loader refuses `venc.fps` | | |
 
-A driver that offers no mode for `venc.fps` fails the pipeline start with
-`ERROR: pad N offers no mode for F fps`.
+A recording larger than 1920x1080 that does not fit the picked mode in
+either dimension takes the 3840x2160 mode instead (the loader then requires
+`venc.fps` ≤ 30); one that fits (up to 2944x1656 under native 60 on the
+six-mode driver) is scaled down from the picked mode on VPE port 1.
+
+A driver that offers no mode for `venc.fps` and the readout fails the
+pipeline start with `ERROR: pad N offers no binned|native mode for F fps`.
+The loader cannot see the driver, so native 61–100 passes it and fails the
+start on the stock or five-mode driver.
+
+Upstream (gilankpam/mabur#108) names the native tiers in a fixed table for
+the six-mode driver only. This fork keeps choosing from the driver's own
+list, so native 60 also runs on the stock driver the drone images load by
+default.
 
 The full view stops at 90 fps because of the sensor, not the encoder: a
 frame is VMAX lines × the line time, full height binned needs VMAX ≥ 2250,
@@ -76,8 +107,9 @@ at least 320x180. The config loader cannot see the driver: it accepts a size
 that the mode either known lineup picks for `venc.fps` can serve, and the
 pipeline refuses a size that the loaded driver's pick cannot serve with
 `ERROR: venc.size WxH does not fit the driver's WxH@F mode for F fps`
-(over the air the previous pipeline is restored). Over the air, fps and size
-move together as the single `VENC_MODE` parameter (`docs/mavlink.md`):
+(over the air the previous pipeline is restored). Over the air, fps, size and
+readout move together as the single `VENC_MODE` parameter,
+`<fps>@<WxH>/binned|native` (`docs/mavlink.md`):
 
 - 1–90 fps: any 16:9 size up to 1920x1080 (1280x720, 1920x1080).
 - 91–100 fps: 16:9 up to 1728x972 on waybeam's driver; on the stock one any
@@ -86,6 +118,10 @@ move together as the single `VENC_MODE` parameter (`docs/mavlink.md`):
 - 101–120 fps: waybeam's 1728:816 shape up to 1728x816 (1728x816, 1152x544,
   864x408), where 1280x720 is refused (16 % off its aspect); on the stock
   driver 1280x720 as above.
+- Native: any 16:9 size up to the window (1280x720 and 1920x1080 on every
+  driver; up to 2944x1656 or 2304x1296 on the six-mode one). Encoding above
+  1920x1080 costs encoder time (upstream measured enc p50 14 ms at
+  2944x1656@60 against 5 ms at 1280x720) and needs a ground decoder for it.
 
 Encoding the mode's own size keeps all its detail but costs encoder time:
 1728x972 at 100 fps reads 158 % of the H.265 engine's rated macroblock rate
