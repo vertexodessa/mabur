@@ -603,6 +603,7 @@ struct RealActuator : mabur::Actuator {
   std::atomic<bool>* retune_waiting = nullptr;
   uint8_t cur = 0;  // set to start_ch where the actuator is configured
   uint8_t cur_w = 20;  // the tuned width, set with cur
+  uint8_t want_w = 20;  // the session's width; cur_w drops to 20 on a channel without a pair
   // A retune that arrived during a calibration sweep and has not been
   // performed yet (see retune() below). Agent-thread-only, like every other
   // member here.
@@ -698,8 +699,15 @@ struct RealActuator : mabur::Actuator {
       // FastRetune keeps the width; a width change (a 20 MHz session on a
       // 40 config, or its revert) needs the full channel set. A 40 request
       // on a channel without an HT40 pair stays 20.
-      const uint8_t w = (width == 40 && mabur::ht40_offset(ch) == 0) ? 20 : width;
-      if (w != 0 && w != cur_w) {
+      // Palianytsia: a hop off the set can cross the pair grid (36 is
+      // HT40+, 40 HT40-) or land on 165, which has no pair. FastRetune keeps
+      // the tuned width and offset, so the target comes from the session's
+      // width (want_w, the last one asked for) and anything FastRetune
+      // cannot keep takes the full path; back on a pair channel the
+      // session's 40 returns.
+      if (width != 0) want_w = width;
+      const uint8_t w = (want_w == 40 && mabur::ht40_offset(ch) == 0) ? 20 : want_w;
+      if (w != cur_w || (w == 40 && mabur::ht40_offset(ch) != mabur::ht40_offset(cur))) {
         dev->SetMonitorChannel(w == 40 ? SelectedChannel{ch, mabur::ht40_offset(ch),
                                                          CHANNEL_WIDTH_40}
                                        : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
@@ -1552,6 +1560,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   actuator.retune_waiting = &retune_waiting;
   actuator.cur = start_ch;
   actuator.cur_w = cfg.radio.width == 40 ? 40 : 20;  // as InitWrite
+  actuator.want_w = actuator.cur_w;
   actuator.control_rt.ldpc = &live_ldpc;
   actuator.control_rt.gen = &radiotap_gen;
   // Encoder starts at the "normal" ROI QP (RcAgent only calls set_roi_qp on
@@ -3670,8 +3679,10 @@ int main(int argc, char** argv) {
   // missing/garbage/non-member file is silently the first member -- nothing
   // to configure, nothing to repair.
   const auto remembered_ch = mabur::read_channel_file(mabur::kDroneChannelFile);
+  // Palianytsia: the GS may have moved us off the set (mabur::channel_5g).
   const bool use_remembered =
-      remembered_ch && mabur::channel_set_member(cfg.radio.channels, *remembered_ch);
+      remembered_ch && (mabur::channel_set_member(cfg.radio.channels, *remembered_ch) ||
+                        mabur::channel_5g(*remembered_ch));
   const uint8_t start_ch = use_remembered ? *remembered_ch : cfg.radio.channels.front();
   {
     std::string set_str;
