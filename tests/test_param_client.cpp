@@ -134,7 +134,7 @@ TEST(missing_index_is_reread_then_partial) {
 TEST(list_with_wrong_count_flags_mismatch) {
   Rig r;
   r.c.set_linked(true, 1000);
-  feed_row(r.c, mabur::cfgparam::kVencModeRow, 1001, /*count=*/13);
+  feed_row(r.c, mabur::cfgparam::kVencModeRow, 1001, /*count=*/mabur::cfgparam::kCount + 1);
   CHECK(r.c.state().table_mismatch);
   CHECK(r.c.state().rows[mabur::cfgparam::kVencModeRow].have_value);
   CHECK(r.c.state().rows[mabur::cfgparam::kVencModeRow].value.s == "60@1920x1080/binned");
