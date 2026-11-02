@@ -53,7 +53,7 @@ ConfigApplyPath apply_path_for(size_t row);
 
 struct ConfigApplyHooks {
   std::function<void(const Config&)> set_knobs;                     // RcAgent's live knobs
-  std::function<bool(const Config&, std::string* err)> power_plan;  // wall margin reprogram
+  std::function<bool(const Config&, std::string* err)> power_plan;  // wall margin / power_mode reprogram
   std::function<void(bool ldpc)> ldpc;                              // radiotaps + the agent
   std::function<void(bool enable, const Config&)> msp;              // start/stop the MSP thread
   std::function<void()> recorder_stop;                              // onboard recorder off before a rebuild

@@ -58,6 +58,11 @@ inline constexpr Row kTable[] = {
      "Flip the picture left-right, for a camera mounted mirrored"},  // the sensor's orientation is set as the pipeline starts
     {"VENC_FLIP", "venc", "flip", Type::Bool, Apply::Rebuild,
      "Flip the picture upside down, for a camera mounted upside down"},
+    // Appended, not grouped with the radio rows: a row's index is its wire
+    // param_index, and a GS built against the older table keeps reading the
+    // rows it knows at the same places.
+    {"RADIO_PWR_MODE", "radio", "power_mode", Type::Str, Apply::Reprogram,
+     "TX power table: offset flies the calibrated walls, none the chip's own; none undoes a calibration"},  // the plans are replaced in place
 };
 inline constexpr size_t kCount = sizeof(kTable) / sizeof(kTable[0]);
 inline constexpr int kMaxIdLen = 16;
