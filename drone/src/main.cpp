@@ -2067,7 +2067,13 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       *err = "radio not up";
       return false;
     }
-    if (c.radio.power_mode != "offset") { *err = "no offset power plan"; return false; }
+    // A margin only moves walls that are flown; power_mode "none" (a
+    // RADIO_PWR_MODE set) replaces the plans with none, which puts the
+    // chip's own table back (live_power_table.h).
+    if (c.radio.power_mode != "offset" && c.radio.wall_margin_db != live_wall_margin.load()) {
+      *err = "no offset power plan";
+      return false;
+    }
     // Both widths' plans move with the margin; the rung's width's is
     // written now (under tx_gate, inside the table's lock), the other's when
     // the rung next crosses to it.
