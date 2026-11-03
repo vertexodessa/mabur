@@ -329,17 +329,20 @@ static int find_best_mode(const SensorSelectConfig *cfg,
 		 * ceiling rather than by index. */
 		CameraMode offered[16];
 		int n_offered = 0, picked = -1;
-		if (cfg->pick_mode) {
-			for (MI_U32 idx = 0; idx < count && idx < 16; ++idx) {
-				MI_SNR_Res_t res = {0};
-				CameraMode m = {0, 0, 0};
-				if (MI_SNR_GetRes((MI_SNR_PAD_ID_e)p, idx, &res) == 0) {
-					m.w = (uint16_t)res.output.width;
-					m.h = (uint16_t)res.output.height;
-					m.max_fps = (uint16_t)res.maxFps;
-				}
-				offered[n_offered++] = m;
+		for (MI_U32 idx = 0; idx < count && idx < 16; ++idx) {
+			MI_SNR_Res_t res = {0};
+			CameraMode m = {0, 0, 0};
+			if (MI_SNR_GetRes((MI_SNR_PAD_ID_e)p, idx, &res) == 0) {
+				m.w = (uint16_t)res.output.width;
+				m.h = (uint16_t)res.output.height;
+				m.max_fps = (uint16_t)res.maxFps;
 			}
+			offered[n_offered++] = m;
+		}
+		/* Reported to the GS as VENC_MODES, so its mode menu is this
+		 * driver's and not a guess at which build is loaded. */
+		camera_modes_publish(offered, n_offered);
+		if (cfg->pick_mode) {
 			picked = camera_mode_pick(offered, n_offered, cfg->binning,
 				cfg->target_fps, cfg->rec_width, cfg->rec_height);
 			if (picked < 0) {
