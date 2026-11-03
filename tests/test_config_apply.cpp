@@ -201,11 +201,13 @@ constexpr size_t kWallMargin = 0, kVencMode = 2, kVencSlices = 3, kBitrateMax = 
 
 TEST(every_row_has_the_path_from_the_table) {
   using P = ConfigApplyPath;
-  const ConfigApplyPath want[15] = {P::Reprogram, P::Reprogram, P::Rebuild, P::Rebuild,
+  // VENC_MODES (read-only) maps to Rebuild only for completeness: patch_row
+  // refuses every set of it, so nothing is ever applied on that path.
+  const ConfigApplyPath want[16] = {P::Reprogram, P::Reprogram, P::Rebuild, P::Rebuild,
                               P::Knob,      P::Knob,      P::Rebuild, P::Rebuild,
                               P::Rebuild,   P::Rebuild,   P::Knob,    P::Reprogram,
-                              P::Rebuild,   P::Rebuild,   P::Reprogram};
-  REQUIRE(cfgparam::kCount == 15);
+                              P::Rebuild,   P::Rebuild,   P::Reprogram, P::Rebuild};
+  REQUIRE(cfgparam::kCount == 16);
   for (size_t i = 0; i < cfgparam::kCount; ++i) CHECK(apply_path_for(i) == want[i]);
 }
 
@@ -430,7 +432,7 @@ TEST(power_mode_reprogram_publishes_and_refuses_a_bad_value) {
   REQUIRE(at != npos);
   t.replace(at, none.size(), "power_mode = \"offset\"");
   spit(g.path(), t);
-  const size_t row = cfgparam::kCount - 1;
+  const size_t row = static_cast<size_t>(cfgparam::find("RADIO_PWR_MODE"));
   REQUIRE(std::string(cfgparam::kTable[row].id) == "RADIO_PWR_MODE");
   ConfigApplyResult r = apply(g.a, row, Value{Type::Str, false, 0, 0, "none"});
   CHECK(r.ok && r.path == ConfigApplyPath::Reprogram);

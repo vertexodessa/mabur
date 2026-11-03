@@ -18,14 +18,16 @@ namespace mabur {
 
 namespace {
 
-// cfgparam::Apply and ConfigApplyPath are the same three values under
-// different names (the table is shared code with no MAVLink/ConfigApplyPath
+// cfgparam::Apply's three apply paths and ConfigApplyPath are the same
+// values under different names (the table is shared code with no MAVLink/ConfigApplyPath
 // dependency); this converts one to the other.
 ConfigApplyPath from_cfgparam(cfgparam::Apply a) {
   switch (a) {
     case cfgparam::Apply::Knob: return ConfigApplyPath::Knob;
     case cfgparam::Apply::Reprogram: return ConfigApplyPath::Reprogram;
     case cfgparam::Apply::Rebuild: return ConfigApplyPath::Rebuild;
+    // Never applied: patch_row refuses every set of a read-only row.
+    case cfgparam::Apply::ReadOnly: return ConfigApplyPath::Rebuild;
   }
   return ConfigApplyPath::Rebuild;
 }
