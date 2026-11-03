@@ -560,7 +560,7 @@ TEST(lost_accepted_is_recovered_by_the_reread) {
   Rig r;
   link_and_complete_list(r, 1000);
   std::string why;
-  REQUIRE(r.c.set(2, "120@1280x720", 2000, &why));
+  REQUIRE(r.c.set(2, "120@1728x816/binned", 2000, &why));
 
   auto str_wire = [](const char* text, char wire[128]) {
     mabur::paramval::Value v{mabur::cfgparam::Type::Str};
@@ -568,8 +568,8 @@ TEST(lost_accepted_is_recovered_by_the_reread) {
     mabur::paramval::encode_wire(v, wire);
   };
   char old_wire[128], new_wire[128];
-  str_wire("90@1920x1080", old_wire);
-  str_wire("120@1280x720", new_wire);
+  str_wire("90@1920x1080/binned", old_wire);
+  str_wire("120@1728x816/binned", new_wire);
   Bytes ip = ack_pkt("VENC_MODE", 11, old_wire, PARAM_ACK_IN_PROGRESS);
   r.c.on_packet(ip.data(), ip.size(), 2100);
   r.sent.clear();
