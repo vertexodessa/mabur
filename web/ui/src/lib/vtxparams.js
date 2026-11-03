@@ -235,7 +235,8 @@ const SECTION_ORDER = Object.keys(SECTION_KICKER);
 
 // Rows the tab leaves off: still in the drone's table (and editable over
 // MAVLink from elsewhere), but not an operator setting for this page.
-export const HIDDEN = new Set(['RADIO_WALL_MARGN']);
+// VENC_MODES is the driver's mode list, data for a mode menu, not a setting.
+export const HIDDEN = new Set(['RADIO_WALL_MARGN', 'VENC_MODES']);
 
 // Each row's label: what the setting is, not its MAVLink id or config key.
 export const LABELS = {
