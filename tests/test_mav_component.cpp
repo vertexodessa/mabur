@@ -554,7 +554,7 @@ mavparam::Value file_value(const std::string& path, size_t idx) {
 
 }  // namespace
 
-// Every row: a set of the current value writes nothing; a set of another
+// Every settable row: a set of the current value writes nothing; a set of another
 // legal value (legal against the bundle with every other key unchanged)
 // changes exactly one line and reads back; a set of the original value
 // then restores the file byte for byte.
@@ -582,13 +582,15 @@ TEST(every_row_sets_reads_back_and_restores) {
       {"VENC_FLIP", Value{Type::Bool, true}},
       {"RADIO_PWR_MODE", Value{Type::Str, false, 0, 0, "offset"}},
   };
-  static_assert(sizeof(cases) / sizeof(cases[0]) == cfgparam::kCount, "one case per row");
+  // One case per row but VENC_MODES, the read-only one (its own test below).
+  static_assert(sizeof(cases) / sizeof(cases[0]) == cfgparam::kCount - 1, "one case per row");
   ScratchBundle b;
   const std::string bundle = slurp(b.path());
   const auto bundle_lines = lines_of(bundle);
   auto c = make(b.path());
   for (size_t idx = 0; idx < cfgparam::kCount; ++idx) {
-    const Case& k = cases[idx];
+    if (cfgparam::kTable[idx].apply == cfgparam::Apply::ReadOnly) continue;
+    const Case& k = cases[idx < cfgparam::kVencModesRow ? idx : idx - 1];
     REQUIRE(std::string(cfgparam::kTable[idx].id) == k.id);
     const Value cur = file_value(b.path(), idx);
     REQUIRE(!same(cur, k.other));
@@ -638,6 +640,21 @@ TEST(every_row_sets_reads_back_and_restores) {
     CHECK(ack_of(msgs[0]).param_result == PARAM_ACK_ACCEPTED);
     CHECK(slurp(b.path()) == bundle);
   }
+}
+
+// VENC_MODES reports the driver's list: a set of it is refused FAILED with
+// the reason, and the file is left alone.
+TEST(read_only_row_refuses_a_set) {
+  ScratchBundle b;
+  const std::string bundle = slurp(b.path());
+  auto c = make(b.path());
+  auto r = do_set(c, set_value("VENC_MODES", mavparam::Value{cfgparam::Type::Str, false, 0, 0,
+                                                             "90@1920x1080/binned"}));
+  CHECK(r.ack.param_result == PARAM_ACK_FAILED);
+  bool told = false;
+  for (const auto& m : r.rest) told |= statustext(m, nullptr) == "VENC_MODES is read-only";
+  CHECK(told);
+  CHECK(slurp(b.path()) == bundle);
 }
 
 // A calibration apply and parameter sets on two threads, same file: both
