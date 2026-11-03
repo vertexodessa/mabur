@@ -12,6 +12,7 @@
 #ifndef MABUR_VENC_CAMERA_MODES_H
 #define MABUR_VENC_CAMERA_MODES_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -35,6 +36,23 @@ int camera_mode_find(const CameraMode *list, int n, CameraMode want);
 /* 1 when w x h has the mode's aspect ratio and fits inside it (the VPE
  * scales down; a crop or an upscale is not offered). */
 int camera_mode_size_ok(CameraMode mode, uint32_t w, uint32_t h);
+
+/* The list the loaded driver offers, kept as the pipeline last read it so
+ * the MAVLink component can report it (VENC_MODES). At most 16 modes are
+ * kept; until the camera has started there are none. Both are safe to call
+ * from any thread. */
+void camera_modes_publish(const CameraMode *list, int n);
+int camera_modes_offered(CameraMode *out, int cap);
+
+/* The modes of `list` that camera_mode_for can pick, spelled as VENC_MODE
+ * values at each mode's own size and top rate,
+ * "<max_fps>@<W>x<H>/binned|native", comma-separated in the driver's order:
+ * a driver mode outside the lineup (another driver build's crop, the 4K
+ * mode) is left out, since the pipeline would not run it. An entry that
+ * would not fit in `cap` bytes with the closing NUL ends the text there, so
+ * it never holds half an entry. Returns the text's length; `out` is always
+ * NUL-terminated when cap > 0. */
+size_t camera_modes_text(const CameraMode *list, int n, char *out, size_t cap);
 
 #ifdef __cplusplus
 }

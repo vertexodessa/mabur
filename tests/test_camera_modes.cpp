@@ -4,6 +4,9 @@
 #include "camera_modes.h"
 #include "mtest.h"
 
+#include <cstring>
+#include <string>
+
 namespace {
 
 bool same(CameraMode a, CameraMode b) {
@@ -73,6 +76,36 @@ TEST(size_ok_for_the_native_modes) {
   CHECK(camera_mode_size_ok(m100, 2272, 1278) == 1);
   CHECK(camera_mode_size_ok(m100, 1600, 900) == 1);
   CHECK(camera_mode_size_ok(m100, 2560, 1440) == 0);  // larger than the mode
+}
+
+TEST(text_spells_each_lineup_mode_as_a_venc_mode_value) {
+  char out[128];
+  CHECK(camera_modes_text(kWaybeam, 6, out, sizeof out) == std::strlen(out));
+  CHECK(std::string(out) ==
+        "60@2944x1656/native,90@1920x1080/binned,100@2272x1278/native,"
+        "100@1728x972/binned,120@1728x816/binned");  // the 4K mode left out
+  // The stock driver: only its 1920x1080@90 is a mode camera_mode_for picks.
+  camera_modes_text(kStock, 4, out, sizeof out);
+  CHECK(std::string(out) == "90@1920x1080/binned");
+}
+
+TEST(text_ends_at_a_whole_entry) {
+  char out[45];  // room for two entries ("60@2944x1656/native,90@1920x1080/binned" is 39)
+  CHECK(camera_modes_text(kWaybeam, 6, out, sizeof out) == 39);
+  CHECK(std::string(out) == "60@2944x1656/native,90@1920x1080/binned");
+  CHECK(camera_modes_text(kWaybeam, 6, out, 5) == 0 && out[0] == 0);
+  const CameraMode empty_slot[] = {{0, 0, 0}, {1920, 1080, 90}};
+  camera_modes_text(empty_slot, 2, out, sizeof out);
+  CHECK(std::string(out) == "90@1920x1080/binned");
+}
+
+TEST(published_list_reads_back) {
+  CameraMode got[16];
+  camera_modes_publish(kStock, 0);
+  CHECK(camera_modes_offered(got, 16) == 0);
+  camera_modes_publish(kStock, 4);
+  CHECK(camera_modes_offered(got, 16) == 4 && same(got[3], kStock[3]));
+  CHECK(camera_modes_offered(got, 2) == 2 && same(got[1], kStock[1]));
 }
 
 MTEST_MAIN
