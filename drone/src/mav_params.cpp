@@ -54,6 +54,14 @@ Value acc_rec_size(const Config& c) {
 Value acc_lowpwr_enable(const Config& c) { return Value{Type::Bool, c.low_power.enable}; }
 Value acc_msp_enable(const Config& c) { return Value{Type::Bool, c.msp.enable}; }
 Value acc_power_mode(const Config& c) { return Value{Type::Str, false, 0, 0, c.radio.power_mode}; }
+// The driver's list as the pipeline last read it; the config plays no part.
+Value acc_venc_modes(const Config&) {
+  CameraMode list[16];
+  const int n = camera_modes_offered(list, 16);
+  char text[128];  // a Str wire value: 127 bytes and its NUL
+  camera_modes_text(list, n, text, sizeof text);
+  return Value{Type::Str, false, 0, 0, text};
+}
 
 using Accessor = Value (*)(const Config&);
 
@@ -74,6 +82,7 @@ constexpr Accessor kAccessors[] = {
     acc_lowpwr_enable,     // LOWPWR_ENABLE
     acc_msp_enable,        // MSP_ENABLE
     acc_power_mode,        // RADIO_PWR_MODE
+    acc_venc_modes,        // VENC_MODES
 };
 static_assert(sizeof(kAccessors) / sizeof(kAccessors[0]) == cfgparam::kCount,
               "mav_params accessor table must have one entry per cfgparam::kTable row");
@@ -133,6 +142,10 @@ bool patch_row(std::string* text, size_t idx, const Value& v, const Config& curr
     return false;
   }
   const cfgparam::Row& row = cfgparam::kTable[idx];
+  if (row.apply == cfgparam::Apply::ReadOnly) {
+    if (err) *err = std::string(row.id) + " is read-only";
+    return false;
+  }
 
   if (idx != cfgparam::kVencModeRow) {
     std::string rendered;

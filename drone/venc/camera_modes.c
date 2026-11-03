@@ -1,5 +1,9 @@
 #include "camera_modes.h"
 
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+
 /* waybeam's driver, six-mode build (waybeam_venc b723e91, the module
  * gilankpam/openipc-builder ships): up to 90 fps the 2x2-binned full view;
  * above it the sensor cannot read the full height fast enough (a wide
@@ -136,4 +140,54 @@ int camera_mode_known_tier(int binning, uint32_t venc_fps, CameraMode *out)
 			*out = m;
 	}
 	return out->w != 0;
+}
+
+static pthread_mutex_t offered_mu = PTHREAD_MUTEX_INITIALIZER;
+static CameraMode offered_list[16];
+static int offered_n;
+
+void camera_modes_publish(const CameraMode *list, int n)
+{
+	const int cap = (int)(sizeof offered_list / sizeof offered_list[0]);
+	if (n < 0)
+		n = 0;
+	if (n > cap)
+		n = cap;
+	pthread_mutex_lock(&offered_mu);
+	if (n > 0)
+		memcpy(offered_list, list, (size_t)n * sizeof *list);
+	offered_n = n;
+	pthread_mutex_unlock(&offered_mu);
+}
+
+int camera_modes_offered(CameraMode *out, int cap)
+{
+	pthread_mutex_lock(&offered_mu);
+	const int n = offered_n < cap ? offered_n : cap;
+	if (n > 0)
+		memcpy(out, offered_list, (size_t)n * sizeof *out);
+	pthread_mutex_unlock(&offered_mu);
+	return n > 0 ? n : 0;
+}
+
+size_t camera_modes_text(const CameraMode *list, int n, char *out, size_t cap)
+{
+	size_t len = 0;
+	if (cap == 0)
+		return 0;
+	out[0] = '\0';
+	for (int i = 0; i < n; ++i) {
+		const CameraMode m = list[i];
+		if (!m.w || !m.h || !m.max_fps || is_4k(m))
+			continue;
+		char e[48];
+		const int k = snprintf(e, sizeof e, "%s%u@%ux%u/%s",
+			len ? "," : "", (unsigned)m.max_fps, (unsigned)m.w,
+			(unsigned)m.h, in_readout(m, 1) ? "binned" : "native");
+		if (k <= 0 || len + (size_t)k + 1 > cap)
+			break;
+		memcpy(out + len, e, (size_t)k + 1);
+		len += (size_t)k;
+	}
+	return len;
 }

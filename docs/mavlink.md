@@ -301,6 +301,8 @@ quoted string).
 | 9 | `REC_SIZE` | `record.size` | Str | rebuild | Onboard recording resolution, same aspect ratio as the camera's |
 | 10 | `LOWPWR_ENABLE` | `low_power.enable` | Bool | knob | Lower bitrate and frame rate while disarmed to keep the VTX cool; needs msp.enable for arm state |
 | 11 | `MSP_ENABLE` | `msp.enable` | Bool | reprogram | Flight-controller link for the OSD and arm state |
+| 12 | `RADIO_PWR_MODE` | `radio.power_mode` | Str | reprogram | TX power table: offset flies the calibrated walls, none the chip's own; none undoes a calibration |
+| 13 | `VENC_MODES` | none (the camera driver's list) | Str | read-only | The camera driver's modes as VENC_MODE values at each mode's full size and top rate, comma-separated; empty until the camera starts |
 
 "apply" comes from each row's `Apply` value in the table itself
 (`cfgparam::apply_name`, `common/include/mabur/config_params.h`) — how the
@@ -308,7 +310,15 @@ set reaches the running process (`apply_path_for` in
 `drone/src/config_apply.h` maps it to the same three paths for drone-side
 dispatch; "Applying a set" above): knob is a live atomic `RcAgent` reads on
 its next tick, reprogram changes a radio or peripheral setting in place,
-rebuild restarts the encoder pipeline in-process. Ranges are the loader's,
+rebuild restarts the encoder pipeline in-process. A read-only row holds
+no config key: every set of it is refused `FAILED` "<id> is read-only".
+`VENC_MODES` is the list the sensor driver offered when the pipeline last
+started (`camera_modes_publish`, `drone/venc/camera_modes.h`), minus the 4K
+mode, e.g. `60@2944x1656/native,90@1920x1080/binned,100@2272x1278/native,100@1728x972/binned,120@1728x816/binned`
+for waybeam's six-mode driver; a GS builds its camera-mode menu from it
+(every entry is a value VENC_MODE takes, and so is a lower rate or a
+smaller size of the same aspect that `camera_mode_pick` still maps to that
+mode). An entry that would not fit the 127 characters is left off. Ranges are the loader's,
 not repeated here: whatever `maburd` refuses to boot on, a set refuses.
 
 ### Ordering rules

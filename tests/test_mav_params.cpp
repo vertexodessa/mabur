@@ -7,6 +7,7 @@
 
 #include "mtest.h"
 #include "mav_params.h"
+#include "camera_modes.h"
 #include "config.h"
 #include "config_write.h"
 #include "scratch.h"
@@ -353,6 +354,25 @@ TEST(patch_row_single_key_rows_unchanged) {
   std::string want = text;
   REQUIRE(patch_toml_key(&want, "encoder", "bitrate_max_kbps", "30000"));
   CHECK(patched == want);
+}
+
+TEST(venc_modes_reads_the_published_driver_list_and_refuses_sets) {
+  const Config cur = load_config(bundle_path());
+  camera_modes_publish(nullptr, 0);
+  CHECK(rd(cur, cfgparam::kVencModesRow).s.empty());
+  const CameraMode stock[] = {{3840, 2160, 30}, {2560, 1440, 60}, {1920, 1080, 90}, {1472, 816, 120}};
+  camera_modes_publish(stock, 4);
+  CHECK(rd(cur, cfgparam::kVencModesRow).s ==
+        "60@2560x1440/native,90@1920x1080/binned,120@1472x816/binned");
+  camera_modes_publish(nullptr, 0);
+
+  std::string text;
+  REQUIRE(read_text_file(bundle_path(), &text));
+  std::string patched = text, followed, err;
+  CHECK(!patch_row(&patched, cfgparam::kVencModesRow,
+                   Value{Type::Str, false, 0, 0, "90@1920x1080/binned"}, cur, &followed, &err));
+  CHECK(err == "VENC_MODES is read-only");
+  CHECK(patched == text);
 }
 
 MTEST_MAIN
