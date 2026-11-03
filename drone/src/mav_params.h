@@ -37,7 +37,8 @@ bool read(const Config& cfg, size_t idx, Value* out);
 bool render_toml(const Value& v, std::string* out);
 
 // Patches `text` for row `idx`'s own config line(s), leaving `text`
-// unchanged on failure. Every row but kVencModeRow owns one line:
+// unchanged on failure. A read-only row (Apply::ReadOnly) patches nothing:
+// *err is "<id> is read-only". Every other row but kVencModeRow owns one line:
 // render_toml(v) must succeed and that line must exist in [section], or
 // *err is "value unsupported" or "<section.key>: key not found".
 // kVencModeRow's Str value "<fps>@<WxH>/binned|native" patches venc.fps,

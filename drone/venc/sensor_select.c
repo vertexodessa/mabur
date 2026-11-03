@@ -325,6 +325,24 @@ static int find_best_mode(const SensorSelectConfig *cfg,
 		if (ret != 0 || count == 0)
 			continue;
 
+		/* The driver's list, reported to the GS as VENC_MODES so its
+		 * mode menu is what this driver runs, not a guess at the build. */
+		{
+			CameraMode offered[16];
+			int n_offered = 0;
+			for (MI_U32 idx = 0; idx < count && idx < 16; ++idx) {
+				MI_SNR_Res_t res = {0};
+				CameraMode m = {0, 0, 0};
+				if (MI_SNR_GetRes((MI_SNR_PAD_ID_e)p, idx, &res) == 0) {
+					m.w = (uint16_t)res.output.width;
+					m.h = (uint16_t)res.output.height;
+					m.max_fps = (uint16_t)res.maxFps;
+				}
+				offered[n_offered++] = m;
+			}
+			camera_modes_publish(offered, n_offered);
+		}
+
 		for (MI_U32 idx = 0; idx < count; ++idx) {
 			MI_SNR_Res_t res = {0};
 			ret = MI_SNR_GetRes((MI_SNR_PAD_ID_e)p, idx, &res);

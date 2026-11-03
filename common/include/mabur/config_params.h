@@ -16,8 +16,10 @@ enum class Type : uint8_t { Bool, Int32, Real32, Str };
 // How a set reaches the running process (drone/src/config_apply.cpp,
 // apply_path_for): Knob is a live value RcAgent reads on its next tick,
 // Reprogram changes a radio or peripheral setting in place, Rebuild stops
-// and restarts the encoder pipeline in-process.
-enum class Apply : uint8_t { Knob, Reprogram, Rebuild };
+// and restarts the encoder pipeline in-process. ReadOnly rows report what
+// the drone found rather than a config key, and every set of one is
+// refused.
+enum class Apply : uint8_t { Knob, Reprogram, Rebuild, ReadOnly };
 
 struct Row {
   const char* id;       // the MAVLink parameter id (<=16 chars, no NUL guaranteed on the wire)
@@ -63,6 +65,10 @@ inline constexpr Row kTable[] = {
     // rows it knows at the same places.
     {"RADIO_PWR_MODE", "radio", "power_mode", Type::Str, Apply::Reprogram,
      "TX power table: offset flies the calibrated walls, none the chip's own; none undoes a calibration"},  // the plans are replaced in place
+    // Not a config key: the camera driver's own list, read when the
+    // pipeline starts, so a GS can offer the modes this drone's driver has.
+    {"VENC_MODES", "venc", "driver_modes", Type::Str, Apply::ReadOnly,
+     "The camera driver's modes as VENC_MODE values at each mode's full size and top rate, comma-separated; empty until the camera starts"},
 };
 inline constexpr size_t kCount = sizeof(kTable) / sizeof(kTable[0]);
 inline constexpr int kMaxIdLen = 16;
@@ -70,6 +76,8 @@ inline constexpr int kMaxIdLen = 16;
 // kTable's row index for VENC_MODE -- the one row whose Str value packs
 // three config keys (venc.fps, venc.size and venc.binning) instead of one.
 inline constexpr size_t kVencModeRow = 2;
+// kTable's row index for VENC_MODES, the read-only driver list.
+inline constexpr size_t kVencModesRow = 15;
 
 // At most this many digits per VENC_MODE number: every value fits an int
 // with room to spare, so the text never overflows on its way in.
@@ -136,13 +144,14 @@ inline int find(const char* id16) {
   return -1;
 }
 
-// "knob" | "reprogram" | "rebuild": how docs/vtx-config-mavlink.md and a future UI
+// "knob" | "reprogram" | "rebuild" | "read-only": how docs/vtx-config-mavlink.md and a future UI
 // label a row's apply path.
 inline const char* apply_name(Apply a) {
   switch (a) {
     case Apply::Knob: return "knob";
     case Apply::Reprogram: return "reprogram";
     case Apply::Rebuild: return "rebuild";
+    case Apply::ReadOnly: return "read-only";
   }
   return "?";
 }
