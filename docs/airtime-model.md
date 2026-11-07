@@ -140,7 +140,9 @@ The cost is pooling. A frame its own repairs cannot save (two bodies
 lost) relies on the next frames' repairs; with those held to the next
 frame's end, their window reaches back into this frame only by
 `window − next frame's symbols`. Run the mode with a window of about two
-frames (`fec.window = 64` for frames of ~20 symbols). On a recorded
+frames (`fec.window = 64` for frames of ~20 symbols). A config without the `repairs_with_frame` key gets the
+mode and a window raised to at least 64 (logged among the defaulted keys);
+an explicit key keeps the configured window as it is. On a recorded
 120 fps sequence (`tools/bench/frame_fec_sim.cpp`, whole-body loss),
 window 64: lossy frames waiting longer than one display period fall from
 ~30 % to ~10 % at 4 % body loss, and frames never completed rise from 0
