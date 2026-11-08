@@ -1,4 +1,4 @@
-// Paired A/B: same frames and same per-frame loss mask through the real codec under v0.9 and R.
+// Paired A/B: same frames and same per-frame loss mask through the real codec under the frame-tail rule and R.
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -45,6 +45,6 @@ int main(int ac,char**av){int nfr=ac>1?atoi(av[1]):20000,seeds=ac>2?atoi(av[2]):
  for(double n:{30.,60.,88.,130.})for(auto sc:{make_tuple(0,.02,1),make_tuple(0,.05,3),make_tuple(1,.05,0),make_tuple(0,.10,3),make_tuple(1,.10,0)})for(int s=0;s<seeds;s++)jobs.push_back({get<0>(sc),get<1>(sc),get<2>(sc),n,s,{}});
  atomic_size_t idx{0};vector<thread> th;for(int t=0;t<24;t++)th.emplace_back([&]{size_t i;while((i=idx++)<jobs.size()){auto&j=jobs[i];run(j.k,j.e,j.b,j.n,1000*j.s+(uint64_t)j.n*7+(uint64_t)(j.e*1000)*3+j.b+j.k*91,nfr,j.o);}});for(auto&t:th)t.join();
  map<tuple<double,int,double,int>,Res> a;for(auto&j:jobs){auto&x=a[{j.n,j.k,j.e,j.b}];x.fr+=j.o.fr;x.both+=j.o.both;x.onlyR+=j.o.onlyR;x.onlyD+=j.o.onlyD;x.onlyR_afterfail+=j.o.onlyR_afterfail;}
- printf("n scen frames lost_both only_v0.9 only_R only_R_after_R_failed_prev  (%% of frames: both onlyD onlyR)\n");
+ printf("n scen frames lost_both only_frame_tail only_R only_R_after_R_failed_prev  (%% of frames: both onlyD onlyR)\n");
  for(auto&kv:a){auto&[n,k,e,b]=kv.first;auto&x=kv.second;printf("%.0f %s%.0f%%b%d %ld %ld %ld %ld %ld (%.3f %.3f %.3f)\n",n,k?"mix":"fix",e*100,b,x.fr,x.both,x.onlyD,x.onlyR,x.onlyR_afterfail,100.*x.both/x.fr,100.*x.onlyD/x.fr,100.*x.onlyR/x.fr);}
 }

@@ -1399,6 +1399,9 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
                           agg.decoder().repair_window_recent(s), drained_ms);
         fstream.set_gap_timeout(
             s, static_cast<uint64_t>(gap_policy.timeout_ms(s)));
+        fstream.set_gap_frame_span(s, gap_policy.us_per_symbol(s),
+                                   gap_policy.margin_ms(),
+                                   gap_policy.cap_ms());
       }
     }
 #ifdef MABUR_LOSS_SIM
