@@ -278,6 +278,11 @@ bool ConfigApplier::dispatch(size_t row_idx, const std::string& field, const Con
         hooks_.msp(cand.msp.enable, cand);
         return true;
       }
+      if (is(row, "venc", "min_iqp")) {
+        if (hooks_.min_iqp(cand.venc.core.min_iqp)) return true;
+        *reason = "the encoder refused the keyframe QP floor";
+        return false;
+      }
       *reason = field + ": no reprogram for this key";
       return false;
     case ConfigApplyPath::Rebuild:

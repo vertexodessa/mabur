@@ -117,8 +117,10 @@ column below:
 - **Knob** (`ENC_BITRATE_MAX`, `ENC_AIRTIME`, `LOWPWR_ENABLE`): the new
   value is written to a live atomic `RcAgent` reads on its next tick.
   Nothing stops.
-- **Reprogram** (`RADIO_WALL_MARGN`, `RADIO_LDPC`, `MSP_ENABLE`): a radio
-  or peripheral setting changes in place. `RADIO_WALL_MARGN` rebuilds
+- **Reprogram** (`RADIO_WALL_MARGN`, `RADIO_LDPC`, `MSP_ENABLE`,
+  `VENC_MIN_IQP`): a radio, peripheral or encoder setting changes in place.
+  `VENC_MIN_IQP` writes the encoder's keyframe QP floor; the next keyframe
+  obeys it. `RADIO_WALL_MARGN` rebuilds
   both widths' TX-power plans and writes the live rung's under the retune
   gate (`docs/calibration.md` "Per-width tables on the drone");
   `RADIO_LDPC` rebuilds the control radiotaps and `RcAgent` re-applies
@@ -214,6 +216,7 @@ quoted string).
 | 13 | `VENC_FLIP` | `venc.flip` | Bool | rebuild | Flip the picture upside down, for a camera mounted upside down |
 | 14 | `RADIO_PWR_MODE` | `radio.power_mode` | Str | reprogram | TX power table: offset flies the calibrated walls, none the chip's own; none undoes a calibration |
 | 15 | `VENC_MODES` | none (the camera driver's list) | Str | read-only | The camera driver's modes as VENC_MODE values at each mode's full size and top rate, comma-separated; empty until the camera starts |
+| 16 | `VENC_MIN_IQP` | `venc.min_iqp` | Int32 | reprogram | Keyframe quality floor, 0 to 51 (0 = the firmware's own); higher makes keyframes smaller and the moment after each one coarser |
 
 "apply" comes from each row's `Apply` value in the table itself
 (`cfgparam::apply_name`, `common/include/mabur/config_params.h`) — how the
