@@ -543,6 +543,17 @@ static void onset_then_swap(Rig& g, std::vector<Rung> new_rungs) {
   nl.ladder = std::move(new_rungs);
   g.core->replace_ladder(nl, static_cast<double>(g.clk.ms));
 }
+// A move off a healthy link has no frozen reference. Revert = the -1 clamps
+// to rung 0 and the link drops to its floor on an operator's channel change.
+TEST(hop_restore_without_a_reference_keeps_the_rung) {
+  Rig g(2, 0);
+  link_up(g);
+  g.vrx->restore_rung(2, static_cast<double>(g.clk.ms));
+  REQUIRE(g.vrx->cur_op().mcs == 2);
+  g.vrx->restore_rung(-1, static_cast<double>(g.clk.ms));
+  CHECK(g.vrx->cur_op().mcs == 2);
+  CHECK(std::string(to_string(g.vrx->ctl().last_event().reason)) == "hop_restore");
+}
 TEST(hop_restore_survives_ladder_swap) {
   Rig g(2, 0); freeze_auto(g);
   onset_then_swap(g, {{2, 0.5, 0.25, 40}, {3, 0.5, 0.25, 40}, {4, 0.5, 0.25, 40}});
