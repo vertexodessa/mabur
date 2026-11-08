@@ -21,9 +21,9 @@ namespace maburgs {
 // post-fade repair burst can still heal the gap. cap == 0 disables the
 // stretch entirely (fixed floor, the pre-policy behavior).
 //
-// w is self-calibrating: callers pass the decoder's observed repair
-// window_len high-water mark (the GS config does not know the drone's
-// fec.window, and this stays correct if per-rung TX windows ever exist).
+// w is self-calibrating: callers pass the largest repair window_len the
+// decoder saw in the last seconds (the GS config does not know the drone's
+// fec.window, and a declared frame picks its own span).
 // Until a repair has been seen (w == 0) a conservative default applies.
 class GapTimeoutPolicy {
  public:
@@ -72,7 +72,7 @@ class GapTimeoutPolicy {
   static constexpr int kDefaultWindow = 32;  // pre-calibration starting
                                               // estimate, before a repair
                                               // sets window from the
-                                              // observed high-water mark
+                                              // observed recent repair window
 
   struct S {
     bool seeded = false;
@@ -80,7 +80,7 @@ class GapTimeoutPolicy {
     uint64_t last_seq = 0;
     uint64_t last_ms = 0;
     double rate = 0.0;      // syms/s EWMA
-    int window = kDefaultWindow;  // observed TX window (repair hwm)
+    int window = kDefaultWindow;  // observed recent TX window
   };
 
   const int floor_ms_;
