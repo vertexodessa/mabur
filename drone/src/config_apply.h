@@ -56,6 +56,7 @@ struct ConfigApplyHooks {
   std::function<bool(const Config&, std::string* err)> power_plan;  // wall margin / power_mode reprogram
   std::function<void(bool ldpc)> ldpc;                              // radiotaps + the agent
   std::function<void(bool enable, const Config&)> msp;              // start/stop the MSP thread
+  std::function<bool(int qp)> min_iqp;                              // the encoder's keyframe QP floor
   std::function<void()> recorder_stop;                              // onboard recorder off before a rebuild
   std::function<void(const Config&)> record_configure;              // recorder channel + size
   std::function<bool(const Config&)> pipeline_restart;              // pipeline-only restart

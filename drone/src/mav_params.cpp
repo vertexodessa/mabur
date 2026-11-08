@@ -65,6 +65,10 @@ Value acc_venc_modes(const Config&) {
   return Value{Type::Str, false, 0, 0, text};
 }
 
+Value acc_venc_min_iqp(const Config& c) {
+  return Value{Type::Int32, false, static_cast<int32_t>(c.venc.core.min_iqp)};
+}
+
 using Accessor = Value (*)(const Config&);
 
 // One accessor per row of cfgparam::kTable, same order. The static_assert
@@ -87,6 +91,7 @@ constexpr Accessor kAccessors[] = {
     acc_venc_flip,         // VENC_FLIP
     acc_power_mode,        // RADIO_PWR_MODE
     acc_venc_modes,        // VENC_MODES
+    acc_venc_min_iqp,      // VENC_MIN_IQP
 };
 static_assert(sizeof(kAccessors) / sizeof(kAccessors[0]) == cfgparam::kCount,
               "mav_params accessor table must have one entry per cfgparam::kTable row");
