@@ -69,6 +69,8 @@ inline constexpr Row kTable[] = {
     // pipeline starts, so a GS can offer the modes this drone's driver has.
     {"VENC_MODES", "venc", "driver_modes", Type::Str, Apply::ReadOnly,
      "The camera driver's modes as VENC_MODE values at each mode's full size and top rate, comma-separated; empty until the camera starts"},
+    {"VENC_MIN_IQP", "venc", "min_iqp", Type::Int32, Apply::Reprogram,
+     "Keyframe quality floor, 0 to 51 (0 = the firmware's own); higher makes keyframes smaller and the moment after each one coarser"},  // the encoder's rate control, in place
 };
 inline constexpr size_t kCount = sizeof(kTable) / sizeof(kTable[0]);
 inline constexpr int kMaxIdLen = 16;

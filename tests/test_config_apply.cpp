@@ -127,6 +127,10 @@ struct Fake {
       order.push_back("msp");
       msp.emplace_back(enable, c);
     };
+    h.min_iqp = [this](int) {
+      order.push_back("min_iqp");
+      return true;
+    };
     h.recorder_stop = [this] {
       order.push_back("recorder_stop");
       ++recorder_stop;
@@ -203,11 +207,12 @@ TEST(every_row_has_the_path_from_the_table) {
   using P = ConfigApplyPath;
   // VENC_MODES (read-only) maps to Rebuild only for completeness: patch_row
   // refuses every set of it, so nothing is ever applied on that path.
-  const ConfigApplyPath want[16] = {P::Reprogram, P::Reprogram, P::Rebuild, P::Rebuild,
+  const ConfigApplyPath want[17] = {P::Reprogram, P::Reprogram, P::Rebuild, P::Rebuild,
                               P::Knob,      P::Knob,      P::Rebuild, P::Rebuild,
                               P::Rebuild,   P::Rebuild,   P::Knob,    P::Reprogram,
-                              P::Rebuild,   P::Rebuild,   P::Reprogram, P::Rebuild};
-  REQUIRE(cfgparam::kCount == 16);
+                              P::Rebuild,   P::Rebuild,   P::Reprogram, P::Rebuild,
+                              P::Reprogram};
+  REQUIRE(cfgparam::kCount == 17);
   for (size_t i = 0; i < cfgparam::kCount; ++i) CHECK(apply_path_for(i) == want[i]);
 }
 
