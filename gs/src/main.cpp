@@ -1396,7 +1396,7 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
       gap_update_ms = drained_ms;
       for (int s = 0; s < 2; ++s) {
         gap_policy.update(s, agg.decoder().newest_seq(s),
-                          agg.decoder().repair_window(s), drained_ms);
+                          agg.decoder().repair_window_recent(s), drained_ms);
         fstream.set_gap_timeout(
             s, static_cast<uint64_t>(gap_policy.timeout_ms(s)));
       }
