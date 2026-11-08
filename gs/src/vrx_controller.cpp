@@ -151,7 +151,10 @@ mabur::rc::Rcf VrxController::build_rcf() {
 }
 
 void VrxController::restore_rung(int rung, double now_ms) {
-  ctrl_.restore(rung, now_ms);
+  // rung < 0: the verdict froze no reference, as on a move off a healthy
+  // link. Stay on the current rung; rung 0 would cut the link's capacity to
+  // its floor while the encoder and the queue still run at this rate.
+  ctrl_.restore(rung < 0 ? ctrl_.rung() : rung, now_ms);
   sync_op_();
 }
 

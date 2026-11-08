@@ -302,7 +302,10 @@ Flight record and the budget/efficiency fit:
 6. **s3 util.** `u3` over `s3_down_util`, held for the confirm window.
 7. **Promote.** Clean margin and the probe gate.
 
-The residual demotes ignore `min_between_changes_ms`. During probation, a
+The residual demotes ignore `min_between_changes_ms`, but neither fires for
+1200 ms after a rung change: the change retunes the encoder's bitrate, which on
+Star6E emits a keyframe, and the frames queued behind that keyframe read as
+residual loss. The util demotes are not held. During probation, a
 util excess demotes at once (reason `probation`). A residual or util
 demote from a rung on probation books a penalty; a fade demote does not. A sample with `sample_valid = false` decides
 nothing and does not count as feedback; `feedback_timeout_ms` covers that

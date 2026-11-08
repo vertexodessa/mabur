@@ -652,7 +652,8 @@ pair").
 - `HopAction::Order` also calls `VrxController::restore_rung(ref_rung, now)`
   → `LadderController::restore()`: rung set directly, probation cleared,
   probe-before-promote skipped, logged as ctl.log reason `hop_restore`.
-  This fires **synchronously at order time**, so `video → restore` can be
+  An order with no frozen `ref_rung` (a move off a healthy link) re-enters
+  the current rung the same way. This fires **synchronously at order time**, so `video → restore` can be
   negative, and `tools/flightreport.py` anchors its restore match to the
   order timestamp (§8).
 - `fade`/`unknown` verdicts: no restore, no blank; the ladder alone decides.
