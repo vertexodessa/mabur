@@ -163,7 +163,8 @@ TEST(profile_and_overhead_track_ladder_after_forced_demote) {
 
   std::optional<VrxController::Out> out;
   LinkHealth lossy{true, 0.0, 0.2, false};  // residual_loss > 0 -> demote
-  for (int i = 0; i < 40 && vrx.ctl().rung() != 0; ++i) {
+  // 150 steps of 10 ms: past the residual hold that follows the promote.
+  for (int i = 0; i < 150 && vrx.ctl().rung() != 0; ++i) {
     now += 10;
     vrx.on_video(now);
     out = vrx.step(now, lossy);
