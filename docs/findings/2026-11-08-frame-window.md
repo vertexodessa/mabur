@@ -1,6 +1,6 @@
 # Repair window per frame: model and host A/B — 2026-11-08
 
-**Status:** `docs/airtime-model.md` "Repairs at the frame end" owns the rule as built. Model and host A/B only; the `tools/bench/fecab` run on the drone (latency, `maburd` CPU, `frame_end_us/rep`) has not happened.
+**Status:** `docs/airtime-model.md` "Repairs at the frame end" owns the rule as built. Model, host A/B and one on-air bench A/B/A; the `tools/bench/fecab` loss-sim gate against current master has not been run.
 
 ## Question
 
@@ -50,7 +50,7 @@ Real codec, D against R:
 | 130 | 2 % single | 1 | 9 | 38 | 0 |
 | 130 | 5 % bursts of 3 | 811 | 2981 | 1030 | 37 |
 
-R loses some frames the tail rule saves. Every repair of an R frame spans the same symbols, so an unrecovered loss in the reach into the previous frame costs one repair of the budget of this frame, and a loss past the budget leaves nothing partly solved. The 2 % row at n = 130 is the one cell where R loses more in total. Why it does there has not been established.
+R loses some frames the tail rule saves. Every repair of an R frame spans the same symbols, so an unrecovered loss in the reach into the previous frame costs one repair of the budget of this frame, and a loss past the budget leaves nothing partly solved. The 2 % row at n = 130 is the one cell where R loses more in total. A longer run of that cell (479 616 frames): 1 lost by both, 70 only by the frame-tail rule, 127 only by R, and all 127 are frames past the 128-symbol cap (109 of them enhance, whose tail has the fewest repairs). Keeping those frames at window 64 changes nothing (126 only-R losses), so the 128-symbol reach is not the cause. The likely cause, not proven: the next frame of the layer, if it fits under the cap, holds all its repairs and reaches back only 32 symbols, where the frame-tail rule would send it front repairs reaching back 64. Not pursued: 0.03 % of frames in the one cell, and R has fewer late frames there (0.34 % against 0.75 %).
 
 ## What the model says
 
@@ -59,6 +59,28 @@ R loses some frames the tail rule saves. Every repair of an R frame spans the sa
 - Build cost is quadratic in the frame. Without the cap, at n = 130, 2 % loss: 8.7 % late at `n+16` against 0.69 % for D; at half the row cost that excess is gone, so it is the CPU and not the code. With the cap R adds about 1.7 ms of build per frame at n = 88 and 2.9 ms at n = 130, and peaks at 7.8 ms inline.
 - Outages of 2–15 ms leave every rule at about 5–6 %: the batch goes with the frame.
 
+## GS gap timeout
+
+The mid-frame timer runs from the last advance of the contiguous prefix, and the window-based timeout only knows frames already seen. A frame of 65 to 128 symbols used to send front repairs; now all its repairs follow its last source, so a hole near its head waits for the frame to serialize. At MCS 0, 20 MHz and about 1500 symbols/s a 120-symbol frame after 25-symbol frames gets 57 ms against about 54 ms of send time (arithmetic, not a run). `FrameStream` therefore stretches the wait for a hole in one frame to the time left to send that frame at the estimated rate plus the policy margin, up to the policy cap, and never shortens it. A frame missing its first chunk has no header yet and counts its whole size.
+
+## On air, bench
+
+SSC338Q with a 8822E card, MCS 3, 20 MHz, 60 fps, encoder peak about 10.5 Mbps, real interference (2.5–3.4 % of received frames fail CRC), one ground station, NACK on. Three consecutive 60 s arms after a 40 s settle: the earlier build (PR #117's `repairs_with_frame = true`, window 64), this rule, the earlier build again. The earlier build is not current master, so this does not compare R with the frame-tail rule. The ground station was a separate implementation of the same wire, so the `gap_timeout_policy` change was not in this loop. Frames were 54–60 symbols on average, p95 about 97, and at most 0.4 % were past 128 symbols.
+
+| | earlier | R | earlier |
+|---|---|---|---|
+| Frames delivered | 3150 | 3707 | 3334 |
+| Incomplete | 2 | 0 | 2 |
+| Delivery gaps > 100 ms | 12 | 0 | 8 |
+| Longest gap, ms | 345 | 34 | 331 |
+| NACK requests | 71 | 0 | 66 |
+| Delivered Mbps | 7.5 | 9.6 | 8.4 |
+| `mbr-hot`, % of a core | 14.3 | 22.6 | 14.7 |
+| `maburd`, % of a core | 50.6 | 62.8 | 54.0 |
+| `txq` peak | 149 | 21 | 62 |
+
+`frame_end_us/rep` was 110–136 us, mean 122 (61–63 us at 64 rows in the frame-tail gate). One arm of R on one bench; an earlier run of R alone had 2 gaps over 100 ms and 12 NACK requests in 62 s, so zero is not a guarantee. The `mbr-hot` rise also includes the extra throughput the earlier build did not deliver.
+
 ## Not measured
 
-Drone CPU and `frame_end_us/rep`; whether the frame-end batch has to move to the worker (at 0.95 us per row a 128-symbol frame costs about 7.8 ms inline at overhead 0.5 and 15.6 ms at overhead 1.0, against a 10 ms frame period); decode cost on phones and in WASM; flight loss patterns. The loss-sim bench is the next step: an arm with this rule against the current `maburd`.
+The `tools/bench/fecab` loss-sim gate against the frame-tail rule on hardware; the worst inline batch at high rates, and whether it has to move to the worker (at 0.95 us per row a 128-symbol frame costs about 7.8 ms inline at overhead 0.5, 15.6 ms at overhead 1.0 and 31 ms at the overhead 2.0 of the first rung, against a 10 ms frame period; whether a frame that large occurs at overhead 2.0 is not established); decode cost on phones and in WASM; flight loss patterns.

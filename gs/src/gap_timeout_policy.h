@@ -55,6 +55,18 @@ class GapTimeoutPolicy {
     s.last_ms = now_ms;
   }
 
+  // Microseconds one symbol takes at the estimated send rate; 0 while the
+  // rate is unknown or near silence, or with the stretch disabled, where
+  // timeout_ms() already decides alone.
+  uint32_t us_per_symbol(int sid) const {
+    if (cap_ms_ <= 0 || sid < 0 || sid > 1) return 0;
+    const S& s = s_[sid];
+    if (!s.have_rate || s.rate < kMinRate) return 0;
+    return static_cast<uint32_t>(1e6 / s.rate);
+  }
+  uint64_t cap_ms() const { return cap_ms_ > 0 ? static_cast<uint64_t>(cap_ms_) : 0; }
+  static constexpr uint32_t margin_ms() { return static_cast<uint32_t>(kMarginMs); }
+
   int timeout_ms(int sid) const {
     if (cap_ms_ <= 0 || sid < 0 || sid > 1) return floor_ms_;
     const S& s = s_[sid];
