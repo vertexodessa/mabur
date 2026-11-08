@@ -2105,6 +2105,17 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     if (enable) start_msp(c.msp);
     else stop_msp();
   };
+  apply_hooks.min_iqp = [&](int qp) {
+#ifdef MABUR_HAVE_VENC
+    // 0 in the file leaves the firmware's floor at start; the live call takes
+    // a real QP, so going back to 0 writes that floor.
+    constexpr int kFirmwareMinIqp = 12;
+    return venc_set_min_iqp(qp > 0 ? qp : kFirmwareMinIqp) == 0;
+#else
+    (void)qp;
+    return true;
+#endif
+  };
   apply_hooks.recorder_stop = [&vtx_rec] {
     // Stopped before the pipeline that feeds it goes away, so the file is
     // closed on a whole fragment and the worker is not inside the record
