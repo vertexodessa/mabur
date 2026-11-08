@@ -209,12 +209,38 @@ TEST(residual_demotes_immediately) {
   CHECK(ctl.last_event().reason == CtlReason::Residual);
   CHECK(ctl.counters().demotes_residual == 1);
 
-  // A second residual sample only 50 ms later demotes again -- residual
-  // demotes are exempt from min_between_changes_ms (150 ms default).
+  // The keyframe of that change makes its own residual loss: held 50 ms
+  // later, and the next demote waits for the end of the hold.
   t += 50;
+  CHECK(!ctl.update(bad, t));
+  CHECK(ctl.rung() == 1);
+  t += 1149;
+  CHECK(!ctl.update(bad, t));
+  t += 1;
   CHECK(ctl.update(bad, t));
   CHECK(ctl.rung() == 0);
   CHECK(ctl.counters().demotes_residual == 2);
+}
+
+TEST(residual_hold_does_not_hold_util_demotes) {
+  auto cfg = make_cfg_noprobe();
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 3);
+  feed_for(ctl, t, cfg.probation_ms + 200, 0.3);
+  LinkHealth bad = ok(0.0);
+  bad.residual_loss = 0.01;
+  REQUIRE(ctl.update(bad, t));
+  const double change_t = t;
+  const double high = 0.9 * ctl.budget_base();
+  bool demoted = false;
+  for (int i = 0; i < 20 && !demoted; ++i) {
+    t += 50;
+    demoted = ctl.update(ok(high), t);
+  }
+  CHECK(demoted);
+  CHECK(t - change_t < 1200.0);
+  CHECK(ctl.last_event().reason == CtlReason::Util);
 }
 
 TEST(util_demote_needs_confirm) {
@@ -739,6 +765,7 @@ TEST(event_carries_snr) {
   double t = 0;
   LinkHealth bad = ok3(0.0); bad.residual_loss = 0.05;
   promote_to(ctl, t, 1);
+  feed_for(ctl, t, 1300, 0.3);  // past the hold after the promote
   ctl.update(bad, t);
   CHECK(ctl.last_event().reason == CtlReason::Residual);
   CHECK(ctl.last_event().snr_db == 30.0);
@@ -799,11 +826,9 @@ TEST(measured_rung_equals_rung_when_no_demote) {
   CHECK(ctl.measured_rung() == ctl.rung());
 }
 
-TEST(s3_residual_demote_is_exempt_from_min_between_changes) {
-  // s1's instant residual path is exempt from min_between_changes_ms; s3's
-  // now is too. s3_settle_ms (300) is longer than min_between_changes_ms
-  // (150), so the blank would mask the spacing gate entirely — zero it to
-  // isolate what this test is actually about.
+TEST(s3_residual_demote_waits_for_the_rung_change_hold) {
+  // s3_settle_ms (300) would mask the hold's start, so zero it to isolate
+  // what this test is actually about.
   LadderCfg cfg = make_cfg_noprobe();
   cfg.s3_settle_ms = 0;
   LadderController ctl(cfg);
@@ -813,7 +838,10 @@ TEST(s3_residual_demote_is_exempt_from_min_between_changes) {
   REQUIRE(ctl.probation_ms_left(t) == 0);
   const int before = ctl.rung();
   REQUIRE(ctl.update(ok3(0.3 * ctl.budget_base(), 0.0, 0.02), t));
-  t += 50;  // well inside min_between_changes_ms (150)
+  t += 50;
+  CHECK(!ctl.update(ok3(0.3 * ctl.budget_base(), 0.0, 0.02), t));
+  CHECK(ctl.rung() == before - 1);
+  t += 1150;
   CHECK(ctl.update(ok3(0.3 * ctl.budget_base(), 0.0, 0.02), t));
   CHECK(ctl.rung() == before - 2);
 }
@@ -978,7 +1006,7 @@ TEST(rung_store_residual_demote_sample_feeds_measured_rung) {
   LadderController ctl(make_cfg_noprobe());
   double t = 0;
   promote_to(ctl, t, 2);
-  feed_for(ctl, t, 400, 0.5);    // clears the post-promote blank
+  feed_for(ctl, t, 1300, 0.5);    // clears the post-promote blank and hold
   const uint64_t n_before = ctl.rungs().stat(2).u.n;
   LinkHealth bad = ok(0.0);
   bad.residual_loss = 0.01;
@@ -1117,15 +1145,15 @@ TEST(fade_regime_s3_blanking_invariant_holds) {
     if (ctl.update(ok(bad), t)) demote_t = t;
   REQUIRE(demote_t > 0);
   // Immediately feed continuous s3 residual pressure (clean s1). The s3
-  // demote may not fire before s3_settle_ms (300, blanks s3_live) has
-  // elapsed, but fires instantly on the first live sample after that.
+  // demote may not fire before the rung-change hold (1200) has elapsed,
+  // which outlasts s3_settle_ms (300), but fires on the first sample after.
   double s3_demote_t = -1;
   for (int i = 0; i < 40 && s3_demote_t < 0; ++i, t += 50)
     if (ctl.update(ok3(0.0, 0.0, /*s3_resid=*/0.02), t)) s3_demote_t = t;
   REQUIRE(s3_demote_t > 0);
   CHECK(ctl.last_event().reason == CtlReason::S3Residual);
-  CHECK(s3_demote_t - demote_t >= cfg.s3_settle_ms);        // blank fully honored
-  CHECK(s3_demote_t - demote_t < cfg.s3_settle_ms + 50.0);  // fires on the very next sample
+  CHECK(s3_demote_t - demote_t >= 1200.0);  // hold fully honored
+  CHECK(s3_demote_t - demote_t < 1250.0);   // fires on the very next sample
 }
 
 TEST(fade_cascade_kill_switch_is_legacy) {

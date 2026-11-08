@@ -6,6 +6,13 @@
 
 namespace maburgs {
 
+// A rung change retunes the encoder's bitrate, and on Star6E that emits a
+// keyframe several times a P frame's size, which can take hundreds of ms of air.
+// The frames queued behind it arrive late and read as residual loss. Demoting on
+// that loss changes the bitrate again, so each step pays for the next one. For
+// this long after a change, residual loss does not demote; util demotes still do.
+static constexpr double kRungChangeResidualHoldMs = 1200.0;
+
 const char* to_string(CtlReason r) {
   // Lowercase: this is the operator-visible contract (the ctl: stderr line
   // and the sideport's link.ctl.last_event.reason), one of the reason enum
@@ -341,7 +348,8 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   // 4. Residual (post-FEC) loss demotes immediately, exempt from
   // min_between_changes_ms. If the current rung was on probation, this also
   // books a probation failure and penalizes the rung.
-  if (h.residual_loss > 0.0 && idx_ > 0) {
+  const bool idr_settling = now_ms - last_change_ms_ < kRungChangeResidualHoldMs;
+  if (h.residual_loss > 0.0 && idx_ > 0 && !idr_settling) {
     const int from = idx_;
     const bool was_probation = probation_active_ && idx_ == probation_rung_;
     if (was_probation) {
@@ -497,7 +505,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   // preamble, so hoisting it means hoisting that whole preamble too, and
   // staying here keeps this check's position relative to the 4b fade
   // trigger unchanged from before the branch. Do not "fix" this into 4.
-  if (cfg_.s3_demote && s3_live && h.s3_residual_loss > 0.0 && idx_ > 0) {
+  if (cfg_.s3_demote && s3_live && h.s3_residual_loss > 0.0 && idx_ > 0 && !idr_settling) {
     s3_demote_now(CtlReason::S3Residual, counters_.demotes_s3_residual);
     return true;
   }
