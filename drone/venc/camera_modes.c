@@ -21,10 +21,20 @@ static const CameraMode kNative60 = {2944, 1656, 60};
 static const CameraMode kNative100 = {2272, 1278, 100};
 static const CameraMode kNone = {0, 0, 0};
 static const CameraMode k4K = {3840, 2160, 33};
+#ifdef MABUR_VENC_CV610
+/* The Hi3516CV610 build's IMX335 runs one mode (cv610_pipeline.c). */
+static const CameraMode kCv610Mode = {2592, 1944, 30};
+#endif
 
 CameraMode camera_mode_for(int binning, uint32_t venc_fps, uint32_t rec_w, uint32_t rec_h)
 {
 	CameraMode tier;
+#ifdef MABUR_VENC_CV610
+	(void)binning;
+	(void)rec_w;
+	(void)rec_h;
+	return venc_fps <= kCv610Mode.max_fps ? kCv610Mode : kNone;
+#endif
 	if (binning) {
 		if (venc_fps > kWide100.max_fps)
 			tier = kWide120;
@@ -56,6 +66,10 @@ int camera_mode_find(const CameraMode *list, int n, CameraMode want)
 
 int camera_mode_size_ok(CameraMode mode, uint32_t w, uint32_t h)
 {
+#ifdef MABUR_VENC_CV610
+	/* VPSS centre-crops to the output's aspect, so any aspect fits. */
+	return w <= mode.w && h <= mode.h;
+#endif
 	return (uint64_t)w * mode.h == (uint64_t)h * mode.w &&
 		w <= mode.w && h <= mode.h;
 }
@@ -98,8 +112,14 @@ size_t camera_modes_text(const CameraMode *list, int n, char *out, size_t cap)
 		const CameraMode m = list[i];
 		/* Only the tiers camera_mode_for picks from. */
 		const CameraMode binned_tiers[] = {kFullView, kWide100, kWide120};
+#ifdef MABUR_VENC_CV610
+		const CameraMode native_tiers[] = {kCv610Mode, kCv610Mode};
+		const int binned = 0;
+		(void)binned_tiers;
+#else
 		const CameraMode native_tiers[] = {kNative60, kNative100};
 		const int binned = camera_mode_find(binned_tiers, 3, m) >= 0;
+#endif
 		if (!binned && camera_mode_find(native_tiers, 2, m) < 0)
 			continue;
 		char e[48];

@@ -78,6 +78,27 @@ if(CMAKE_CROSSCOMPILING)
   # into venc_core.
   list(REMOVE_ITEM VENC_CORE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/venc/venc_cfg.c
     ${CMAKE_CURRENT_SOURCE_DIR}/venc/camera_modes.c)
+  # One backend behind the venc_core.h facade, picked at build time.
+  # star6e dlopens the SigmaStar MI libraries; cv610 links the HiSilicon MPP
+  # libraries, which are not part of this repository (docs/hi3516cv610.md).
+  set(MABUR_VENC_BACKEND "star6e" CACHE STRING "Encoder backend: star6e or cv610")
+  set_property(CACHE MABUR_VENC_BACKEND PROPERTY STRINGS star6e cv610)
+  set(MABUR_CV610_SDK_INC "" CACHE PATH "OpenHisilicon checkout (MPP headers)")
+  set(MABUR_CV610_SDK_LIB "" CACHE PATH "Directory holding the MPP .so files")
+  if(MABUR_VENC_BACKEND STREQUAL "cv610")
+    if(NOT MABUR_CV610_SDK_INC OR NOT MABUR_CV610_SDK_LIB)
+      message(FATAL_ERROR "the cv610 backend needs MABUR_CV610_SDK_INC and MABUR_CV610_SDK_LIB")
+    endif()
+    set(VENC_CORE_SRC
+      ${CMAKE_CURRENT_SOURCE_DIR}/venc/venc_core_cv610.c
+      ${CMAKE_CURRENT_SOURCE_DIR}/venc/cv610_pipeline.c
+      ${CMAKE_CURRENT_SOURCE_DIR}/venc/idr_rate_limit.c
+      ${CMAKE_CURRENT_SOURCE_DIR}/venc/timing.c)
+  elseif(MABUR_VENC_BACKEND STREQUAL "star6e")
+    list(FILTER VENC_CORE_SRC EXCLUDE REGEX "cv610[^/]*\\.c$")
+  else()
+    message(FATAL_ERROR "unknown MABUR_VENC_BACKEND ${MABUR_VENC_BACKEND}")
+  endif()
   # NOTE: waybeam links these translation units as a flat .o list; here they
   # become an archive, and an archive member is pulled in only to satisfy an
   # UNDEFINED symbol. Any "registers itself / overrides a weak default"
@@ -88,8 +109,30 @@ if(CMAKE_CROSSCOMPILING)
   add_library(venc_core STATIC ${VENC_CORE_SRC})
   target_include_directories(venc_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/venc ${CMAKE_CURRENT_SOURCE_DIR}/vendor)
-  target_compile_definitions(venc_core PRIVATE
-    PLATFORM_STAR6E HAVE_BACKEND_STAR6E=1 _GNU_SOURCE)
+  if(MABUR_VENC_BACKEND STREQUAL "cv610")
+    target_compile_definitions(venc_core PRIVATE PLATFORM_CV610 _GNU_SOURCE)
+    # PUBLIC through mabur_drone_core: the config loader and main.cpp compile
+    # against the build's sensor table and its module loading.
+    target_compile_definitions(mabur_drone_core PUBLIC MABUR_VENC_CV610)
+    set(CV610_INC ${MABUR_CV610_SDK_INC}/kernel/include/hi3516cv6xx)
+    set(CV610_ISP_INC ${MABUR_CV610_SDK_INC}/libraries/isp/include/hi3516cv6xx)
+    target_include_directories(venc_core PRIVATE
+      ${CV610_INC} ${CV610_INC}/exp_inc
+      ${CV610_ISP_INC} ${CV610_ISP_INC}/3a ${CV610_ISP_INC}/ext_inc)
+    target_link_directories(venc_core PUBLIC ${MABUR_CV610_SDK_LIB})
+    # --no-as-needed: the sensor plugin is dlopen'd and resolves its ISP
+    # symbols from the libraries already loaded, so none of them may be
+    # dropped for looking unused. --allow-shlib-undefined: the MPP libraries
+    # reference each other and the toolchain links them unversioned.
+    target_link_libraries(venc_core PUBLIC
+      -Wl,--allow-shlib-undefined -Wl,--no-as-needed
+      ss_mpi ss_mpi_isp ss_mpi_ae ss_mpi_awb ot_mpi_isp ss_mpi_sysmem
+      ss_mpi_sysbind acs bnr calcflicker dehaze drc extend_stats ir_auto ldci
+      securec ot_osal -Wl,--as-needed)
+  else()
+    target_compile_definitions(venc_core PRIVATE
+      PLATFORM_STAR6E HAVE_BACKEND_STAR6E=1 _GNU_SOURCE)
+  endif()
   # -Os, overriding the Release -O3, to match the optimisation level waybeam
   # ships these exact translation units at. Not cosmetic: the VIF->VPE
   # "layout type 2, bindmode 4 not sync err" / "ISP channel [0] have NOT been

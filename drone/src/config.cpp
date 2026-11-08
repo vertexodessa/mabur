@@ -788,7 +788,11 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   const int binning = cfg.venc.core.binning ? 1 : 0;
   const CameraMode tier = camera_mode_for(binning, cfg.venc.core.fps, 0, 0);
   if (tier.w == 0)
+#ifdef MABUR_VENC_CV610
+    fail("venc.fps", "above the sensor's 30 fps");
+#else
     fail("venc.fps", "above 100 needs venc.binning = true");
+#endif
 
   if (cfg.record.enable && cfg.record.width > 0) {
     const int rw = cfg.record.width, rh = cfg.record.height;

@@ -154,6 +154,19 @@ constraints in devourer's 8822E quirks page
 hardware-verified on this bench** — there is no CU unit here; its only
 on-hardware check is an external tester's rig.
 
+### AIC8800D80
+
+maburd and `linkbench-tx` drive an AIC8800D80 when devourer is built with
+`DEVOURER_AIC8800=ON` and the config sets `radio.usb_vid = 0xa69c` (the PID scan
+does not apply). The chip takes its firmware from the host on every start, from
+`$MABUR_AIC_FW_DIR` (default `/lib/firmware/aic8800D80`); those files are not in
+this repository. It is 20 MHz only with HT MCS 0-7 and non-HT rates, so keep
+`radio.width = 20` and a 20 MHz ladder: a frame asking for anything else is
+refused. LDPC and STBC requests go out BCC, carrier sense cannot be turned off,
+and the Realtek power knobs (`power_mode` other than `"none"`, maburcal) have no
+effect. Protocol and measurements:
+`third_party/devourer/docs/aic8800d80-userspace-injection.md`.
+
 ## Config format
 
 The three configs are TOML. The parser (`common/src/toml.cpp`) accepts a

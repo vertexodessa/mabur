@@ -35,6 +35,10 @@
 #include "UsbOpen.h"
 #include "IRtlRadio.h"
 #include "WiFiDriver.h"
+#if defined(DEVOURER_HAVE_AIC8800)
+#include "aic8800/Aic8800Fw.h"
+#include "aic8800/Aic8800Proto.h"
+#endif
 #include "logger.h"
 
 #include <libusb.h>
@@ -345,21 +349,38 @@ int main(int argc, char** argv) {
     return 1;
   }
   libusb_device_handle* handle = nullptr;
-  const uint16_t pid = open_usb(a.usb_vid, a.usb_pid, usb_ctx, &handle);
-  if (!handle) {
-    std::fprintf(stderr, "error: no radio under VID 0x%04x\n", a.usb_vid);
-    libusb_exit(usb_ctx);
-    return 1;
-  }
-  std::fprintf(stderr, "opened device %04x:%04x\n", a.usb_vid, pid);
-
   std::shared_ptr<devourer::UsbDeviceLock> usb_lock;
-  if (devourer::claim_interface_then_reset(handle, 0, logger, /*do_reset=*/true,
-                                           usb_lock) != 0) {
-    std::fprintf(stderr, "error: claim_interface_then_reset failed\n");
-    libusb_close(handle);
-    libusb_exit(usb_ctx);
-    return 1;
+  int wifi_iface = 0;
+#if defined(DEVOURER_HAVE_AIC8800)
+  if (a.usb_vid == devourer::aic8800::kVid) {
+    // The chip re-enumerates while its firmware loads, so this path opens the
+    // device itself instead of going through the PID scan and the reset below.
+    devourer::aic8800::FwConfig fw;
+    if (const char* dir = std::getenv("MABUR_AIC_FW_DIR")) fw.dir = dir;
+    const int aic_rc = devourer::aic8800::open_radio(usb_ctx, fw, logger, &handle, usb_lock);
+    if (aic_rc != 0) {
+      std::fprintf(stderr, "error: AIC8800 bring-up failed (%d)\n", aic_rc);
+      libusb_exit(usb_ctx);
+      return 1;
+    }
+    wifi_iface = devourer::aic8800::kIfaceFmac;
+  } else
+#endif
+  {
+    const uint16_t pid = open_usb(a.usb_vid, a.usb_pid, usb_ctx, &handle);
+    if (!handle) {
+      std::fprintf(stderr, "error: no radio under VID 0x%04x\n", a.usb_vid);
+      libusb_exit(usb_ctx);
+      return 1;
+    }
+    std::fprintf(stderr, "opened device %04x:%04x\n", a.usb_vid, pid);
+    if (devourer::claim_interface_then_reset(handle, 0, logger, /*do_reset=*/true,
+                                             usb_lock) != 0) {
+      std::fprintf(stderr, "error: claim_interface_then_reset failed\n");
+      libusb_close(handle);
+      libusb_exit(usb_ctx);
+      return 1;
+    }
   }
 
   devourer::DeviceConfig dev_cfg;
@@ -374,7 +395,7 @@ int main(int argc, char** argv) {
     dev.reset(static_cast<IRtlRadio*>(radio.release()));
   if (!dev) {
     std::fprintf(stderr, "error: CreateRadio failed (or not a Realtek radio)\n");
-    libusb_release_interface(handle, 0);
+    libusb_release_interface(handle, wifi_iface);
     libusb_close(handle);
     libusb_exit(usb_ctx);
     return 1;
@@ -699,7 +720,7 @@ int main(int argc, char** argv) {
   g_devourer_should_stop = true;
   if (tx_thread.joinable()) tx_thread.join();
   dev->Stop();
-  libusb_release_interface(handle, 0);
+  libusb_release_interface(handle, wifi_iface);
   libusb_close(handle);
   libusb_exit(usb_ctx);
   return 0;

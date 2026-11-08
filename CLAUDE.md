@@ -94,6 +94,7 @@ Two kinds of doc, two rules:
 | the phase lock (sensor-rate servo against the GS vblank: PhaseLock, the regulator's margin and placement switch, RCF `snr_off`, `display.phase_lock`/`phase_margin_ms`, `screen_mode` exact-rate pick, reg.log `lock=` fields, drone `[sensor] steer`) | docs/phase-lock.md + docs/findings/2026-10-17-phase-lock-spike-2.md |
 | MAVLink tunnel (`T_MAV`, ids, the drone component's routing/heartbeat), the GS MAVLink UDP endpoint and its trust boundary | docs/mavlink.md |
 | drone config parameters over MAVLink (`PARAM_EXT_*` table, applying a set, `.pre-param`, ordering rules, `ParamClient`, mavparam.py) | docs/vtx-config-mavlink.md; the web GS VTX tab → `docs/web-gs.md` |
+| the Hi3516CV610 encoder backend (`MABUR_VENC_BACKEND=cv610`, the IMX335 capture graph, which verbs it implements, its build) | `docs/hi3516cv610.md` |
 | radio/PHY below mabur | `third_party/devourer/CLAUDE.md` |
 
 Design specs and plans live in `docs/superpowers/` — **gitignored**, so

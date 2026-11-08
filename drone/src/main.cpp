@@ -108,6 +108,10 @@
 #include "TxMode.h"
 #include "UsbOpen.h"
 #include "IRtlRadio.h"
+#if defined(DEVOURER_HAVE_AIC8800)
+#include "aic8800/Aic8800Fw.h"
+#include "aic8800/Aic8800Proto.h"
+#endif
 #include "WiFiDriver.h"
 #include "logger.h"
 
@@ -862,7 +866,11 @@ int repin_inherited_threads(const char* comm, int cpu) {
 }
 bool two_core_target() {
 #if defined(__linux__)
-  return sysconf(_SC_NPROCESSORS_ONLN) == 2;
+  // Latched on the first call, which comes before any pin: musl answers
+  // _SC_NPROCESSORS_ONLN from the calling thread's affinity mask, so a later
+  // call on a pinned thread would see one core and skip the placement.
+  static const bool two = sysconf(_SC_NPROCESSORS_ONLN) == 2;
+  return two;
 #else
   return false;
 #endif
@@ -1303,7 +1311,12 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     // a fixed property of the image maburd is built for, not a knob (it was
     // briefly a config key; nothing ever needed to change it).
     static constexpr const char* kModuleLoader = "/usr/bin/load_sigmastar -i";
+#ifdef MABUR_VENC_CV610
+    // The Hi3516 image's init loads the MPP modules before maburd starts.
+    const bool run_loader = false;
+#else
     const bool run_loader = !mabur::mi_modules_live("/sys/module");
+#endif
     if (run_loader)
       std::fprintf(stderr, "MI modules not live: running `%s`\n", kModuleLoader);
     module_loader_thread = std::thread([run_loader]() {
@@ -1348,21 +1361,38 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   }
 
   libusb_device_handle* handle = nullptr;
-  uint16_t pid = open_usb_and_get_pid(cfg.radio.usb_vid, cfg.radio.usb_pid, usb_ctx, &handle);
-  if (!handle) {
-    std::fprintf(stderr, "error: no radio found under VID 0x%04x\n", cfg.radio.usb_vid);
-    libusb_exit(usb_ctx);
-    return 1;
-  }
-  std::fprintf(stderr, "opened device %04x:%04x\n", cfg.radio.usb_vid, pid);
-
   std::shared_ptr<devourer::UsbDeviceLock> usb_lock;
-  rc = devourer::claim_interface_then_reset(handle, 0, logger, /*do_reset=*/true, usb_lock);
-  if (rc != 0) {
-    std::fprintf(stderr, "error: claim_interface_then_reset failed (%d)\n", rc);
-    libusb_close(handle);
-    libusb_exit(usb_ctx);
-    return 1;
+  int wifi_iface = 0;
+#if defined(DEVOURER_HAVE_AIC8800)
+  if (cfg.radio.usb_vid == devourer::aic8800::kVid) {
+    // The chip re-enumerates while its firmware loads, so this path opens the
+    // device itself instead of going through the PID scan and the reset below.
+    devourer::aic8800::FwConfig fw;
+    if (const char* dir = std::getenv("MABUR_AIC_FW_DIR")) fw.dir = dir;
+    const int aic_rc = devourer::aic8800::open_radio(usb_ctx, fw, logger, &handle, usb_lock);
+    if (aic_rc != 0) {
+      std::fprintf(stderr, "error: AIC8800 bring-up failed (%d)\n", aic_rc);
+      libusb_exit(usb_ctx);
+      return 1;
+    }
+    wifi_iface = devourer::aic8800::kIfaceFmac;
+  } else
+#endif
+  {
+    uint16_t pid = open_usb_and_get_pid(cfg.radio.usb_vid, cfg.radio.usb_pid, usb_ctx, &handle);
+    if (!handle) {
+      std::fprintf(stderr, "error: no radio found under VID 0x%04x\n", cfg.radio.usb_vid);
+      libusb_exit(usb_ctx);
+      return 1;
+    }
+    std::fprintf(stderr, "opened device %04x:%04x\n", cfg.radio.usb_vid, pid);
+    rc = devourer::claim_interface_then_reset(handle, 0, logger, /*do_reset=*/true, usb_lock);
+    if (rc != 0) {
+      std::fprintf(stderr, "error: claim_interface_then_reset failed (%d)\n", rc);
+      libusb_close(handle);
+      libusb_exit(usb_ctx);
+      return 1;
+    }
   }
 
   // Jaguar3 TX+RX on one claimed handle: enable_with_tx makes InitWrite keep
@@ -1434,7 +1464,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     rtl_device.reset(static_cast<IRtlRadio*>(radio.release()));
   if (!rtl_device) {
     std::fprintf(stderr, "error: CreateRadio failed (unsupported or non-Realtek chip, or already in use)\n");
-    libusb_release_interface(handle, 0);
+    libusb_release_interface(handle, wifi_iface);
     libusb_close(handle);
     libusb_exit(usb_ctx);
     return 1;
@@ -1627,6 +1657,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // never did.
   {
     if (module_loader_thread.joinable()) module_loader_thread.join();
+#ifndef MABUR_VENC_CV610  // no MI stack on this SoC; the wait could only time out
     const auto mi = mabur::wait_for_mi_modules("/sys/module", 15000);
     if (!mi.ready) {
       std::fprintf(stderr, "warning: MI modules not live after %d ms, starting venc anyway\n",
@@ -1634,6 +1665,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     } else if (mi.waited_ms > 0) {
       std::fprintf(stderr, "waited %d ms for the MI modules\n", mi.waited_ms);
     }
+#endif
   }
   // The record channel's configuration from [record]: here at boot, and
   // again by the config applier before every pipeline rebuild, since the
@@ -1660,7 +1692,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     // there is nothing else to unwind.
     std::fprintf(stderr, "venc_core_start failed — exiting\n");
     join_radio_init();
-    libusb_release_interface(handle, 0);
+    libusb_release_interface(handle, wifi_iface);
     libusb_close(handle);
     libusb_exit(usb_ctx);
     return 3;
@@ -3622,7 +3654,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
 #endif
 
   rtl_device->Stop();
-  libusb_release_interface(handle, 0);
+  libusb_release_interface(handle, wifi_iface);
   libusb_close(handle);
   libusb_exit(usb_ctx);
   return 0;
