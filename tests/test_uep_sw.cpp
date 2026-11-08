@@ -418,11 +418,14 @@ TEST(uep_collect_harvests_repairs_the_frame_left_behind) {
   enc.collect(sink);
   CHECK(harvested.empty());  // worker held: nothing finished yet
   worker.set_held(false);
-  // Wait for the worker to finish the frame's repairs, then harvest.
-  for (int i = 0; i < 3000 && harvested.empty(); ++i) {
+  // Wait for the worker to finish all the frame's repairs: a job can finish
+  // after the first harvest, and between the last harvest and the check.
+  for (int i = 0; i < 3000 && enc.repairs_outstanding(1); ++i) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     enc.collect(sink);
   }
+  CHECK(!enc.repairs_outstanding(1));
+  enc.collect(sink);
   REQUIRE(!harvested.empty());
   for (auto& b : harvested) CHECK(b.stream_id == 1);
   // Once idle, a second harvest finds nothing pending anywhere.

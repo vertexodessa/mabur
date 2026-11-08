@@ -1,4 +1,4 @@
-// A/B on the real SwEncoder/SwDecoder: v0.9 rule vs frame_window. Same frame and loss model as fecsim.
+// A/B on the real SwEncoder/SwDecoder: frame-tail rule vs frame_window. Same frame and loss model as fecsim.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
