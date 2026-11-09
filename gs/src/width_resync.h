@@ -30,9 +30,14 @@ struct WidthCard {
   bool scouting = false;  // the boot scout has it (searching): fixed once the search lets go
 };
 
+// How long a card waits after a failed set_width before the next try: a
+// transient USB error must not leave it at the wrong width, and a lasting one
+// must not cost a full channel set every tick.
+inline constexpr double kWidthRetryMs = 1000.0;
+
 // Once per bring-up and width (tried resets when the card is reopened, when
-// the boot scout lets go of it, or when the width flips): a failed
-// set_width is logged, not retried every tick.
+// the boot scout lets go of it, when the width flips, or kWidthRetryMs after a
+// failed set_width): a failed set_width is logged and paced.
 inline bool needs_width_fix(const WidthCard& c, uint8_t want_mhz) {
   return c.ready && !c.tried && !c.busy && !c.scouting && c.width != want_mhz;
 }

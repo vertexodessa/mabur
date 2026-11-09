@@ -23,6 +23,7 @@ struct FakeCard : maburgs::LinkCard {
   uint8_t ch = 0, width_mhz = 20;
   bool is_ready = true, is_alive = true, scout_ok = true, relay = false;
   bool retune_ok = true;
+  bool fail_set_width = false;        // set_width() is logged and fails
   int refuse_ch = -1;                 // retune() to this one channel fails
   // Relay-style: retune() takes the target at once (channel() reads it, as
   // RemoteCard's does) but ready() reads false until the test re-readies
@@ -59,6 +60,7 @@ struct FakeCard : maburgs::LinkCard {
   uint64_t tx_fail() const override { return txf; }
   bool set_width(uint8_t c, uint8_t w) override {
     calls.push_back("set_width " + std::to_string(c) + "/" + std::to_string(w));
+    if (fail_set_width) return false;
     ch = c; width_mhz = w; return true;
   }
   uint8_t channel() const override { return ch; }
