@@ -413,6 +413,7 @@ class ChannelCore {
   std::vector<uint8_t> cur_ch_;
   uint8_t width_mhz_ = 20;     // the live receiver width (set_width); cfg_.width_mhz at start
   std::vector<bool> width_tried_;
+  std::vector<double> width_retry_ms_;  // when a failed resync may run again; 0 = not due
   std::vector<std::optional<StatsEnergyIn>> energy_last_;
   std::vector<std::optional<StatsDwellIn>> dwell_stats_;
   // Newest NHM busy reading landed on each channel-set member (index

@@ -43,6 +43,7 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
       cur_ch_(static_cast<size_t>(n_cards_), cfg_.start_ch),
       width_mhz_(cfg_.width_mhz),
       width_tried_(static_cast<size_t>(n_cards_), false),
+      width_retry_ms_(static_cast<size_t>(n_cards_), 0.0),
       energy_last_(static_cast<size_t>(n_cards_)),
       dwell_stats_(static_cast<size_t>(n_cards_)),
       member_figs_(cfg_.radio.channels.size()),
@@ -1003,6 +1004,11 @@ void ChannelCore::step_width_resync_() {
   for (int i = 0; i < n_cards_; ++i) {
     auto& fe = *cards_[static_cast<size_t>(i)];
     const bool scouting = scout_busy && i == scout_card_;
+    double& retry_ms = width_retry_ms_[static_cast<size_t>(i)];
+    if (retry_ms != 0.0 && now_ms_cur_ >= retry_ms) {
+      width_tried_[static_cast<size_t>(i)] = false;
+      retry_ms = 0.0;
+    }
     const WidthCard wc{fe.ready(), fe.width(), width_tried_[static_cast<size_t>(i)],
                        dwell_busy_.load() && dwell_card_.load() == i, scouting};
     if (needs_width_fix(wc, width_mhz_)) {
@@ -1015,6 +1021,8 @@ void ChannelCore::step_width_resync_() {
       } else {
         sink_.log(logf_("maburgs radio: card %d width resync to %u MHz on ch %u failed", i,
                         static_cast<unsigned>(width_mhz_), static_cast<unsigned>(ch)));
+        // 40 on a channel with no pair cannot work until the channel changes.
+        if (width_mhz_ != 40 || mabur::ht40_offset(ch) != 0) retry_ms = now_ms_cur_ + kWidthRetryMs;
       }
     }
     // The scout's dwells, ranks and picks are as wide as its card. Told
