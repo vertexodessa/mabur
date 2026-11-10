@@ -95,6 +95,9 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
     sc.busy_dbm = cfg_.radio.scan.busy.busy_dbm;
     sc.blocked_pct = cfg_.radio.scan.busy.blocked_pct;
     sc.leak_per_frame = cfg_.leak_per_frame;
+    // Two passes over the set find a drone on it; past that the search
+    // also bursts on the rest of the 5 GHz grid.
+    sc.grid_after_rounds = 2;
     scout_ = std::make_unique<ChannelScout>(
         sc, *cards_[static_cast<size_t>(scout_card_)],
         [this] { return static_cast<int64_t>(now_ms_()); },
@@ -338,9 +341,11 @@ void ChannelCore::on_session_opened(const mabur::rc::DiscAck& ack, double now_ms
   // relocation to plan.want(), if any, is an ordinary hop order (BootPick).
   const uint8_t x = rc_body_rx_ch_;
   if (ack.vrx_nonce == vrx_.rz_nonce() && !(ack.flags & mabur::rc::kAckKeyMismatch) &&
-      x != 0 && x != plan_.op() && plan_.member(x) && !plan_.hopping()) {
-    sink_.log(logf_("maburgs channel: drone found on %u (op %u): the link forms there",
-                    static_cast<unsigned>(x), static_cast<unsigned>(plan_.op())));
+      x != 0 && x != plan_.op() && (plan_.member(x) || mabur::channel_5g(x)) &&
+      !plan_.hopping()) {
+    sink_.log(logf_("maburgs channel: drone found on %u (op %u): the link forms there%s",
+                    static_cast<unsigned>(x), static_cast<unsigned>(plan_.op()),
+                    plan_.member(x) ? "" : " (outside the set)"));
     plan_.link_found(now_ms, x);
     vrx_.set_proposal(plan_.op());   // a DISC proposes the channel it is sent on: stay
   }
@@ -364,7 +369,7 @@ bool ChannelCore::may_send(int card) const {
 std::vector<uint8_t> ChannelCore::disc_for_card(const std::vector<uint8_t>& frame, int card) const {
   // A DISC proposes the channel it is sent on.
   const uint8_t ch = cards_[static_cast<size_t>(card)]->channel();
-  if (plan_.member(ch)) return disc_for_channel(frame, ch, cfg_.key);
+  if (plan_.member(ch) || mabur::channel_5g(ch)) return disc_for_channel(frame, ch, cfg_.key);
   return frame;
 }
 
@@ -937,7 +942,7 @@ void ChannelCore::step_move_edge_(const ChannelTickIn& in) {
   if (cal_move_hold_.take(vrx_.take_move_edge(), in.cal_running || plan_.hopping())) {
     const uint8_t proposed = vrx_.proposal();
     const uint8_t agreed = vrx_.agreed_channel();
-    if (!plan_.member(agreed))
+    if (!plan_.member(agreed) && agreed != plan_.op())
       sink_.log(logf_("maburgs channel: drone acked %u, not in our set; ignored",
                       static_cast<unsigned>(agreed)));
     plan_.on_ack(now_ms, agreed, proposed);

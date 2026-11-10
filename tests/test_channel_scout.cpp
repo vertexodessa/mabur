@@ -125,6 +125,46 @@ TEST(pinned_dwell_is_retune_settle_burst_only_on_members) {
   CHECK(g.s.rounds() == 2);                // a full pass = both members
 }
 
+// Past grid_after_rounds passes with the search on, every other dwell is a
+// burst on a grid channel outside the set (at 40: those with a pair), never
+// read; the set dwells go on in between, and a restarted search waits the
+// passes again. Revert (set only): a drone parked off the set is never found.
+TEST(grid_search_bursts_outside_the_set_every_other_dwell_after_the_passes) {
+  ScoutCfg c = two(false); c.grid_after_rounds = 2; Rig g(c);
+  g.s.set_op(136); g.s.set_search(true);
+  for (int i = 0; i < 4; ++i) g.s.run_once();
+  CHECK(g.s.rounds() == 2);
+  for (auto& call : g.r.calls) CHECK(call == "retune 136" || call == "retune 144");
+  g.phases.clear();
+  g.s.run_once();
+  CHECK(g.r.calls.back() == "retune 36");     // the first grid channel, not a member
+  REQUIRE(g.phases.size() == 3);              // settle, burst, gap; no observe
+  CHECK(g.phases[1].first == "BW" && g.phases[1].second == 100);
+  g.s.run_once();
+  CHECK(g.r.ch == 136);                       // a set dwell in between
+  g.s.run_once();
+  CHECK(g.r.calls.back() == "retune 40");
+  std::vector<uint8_t> grid;
+  for (int i = 0; i < 60; ++i) {
+    g.s.run_once();
+    const uint8_t ch = g.r.ch;
+    if (ch != 136 && ch != 144 && std::find(grid.begin(), grid.end(), ch) == grid.end())
+      grid.push_back(ch);
+  }
+  CHECK(std::find(grid.begin(), grid.end(), 165) == grid.end());   // no pair at 40
+  CHECK(std::find(grid.begin(), grid.end(), 100) != grid.end());
+  CHECK(grid.size() == 22);                   // the 24 grid channels at 40 minus the two members
+  for (auto& call : g.r.calls) CHECK(call.rfind("read", 0) != 0);
+  g.s.set_search(false); g.s.run_once();      // parked
+  g.s.set_search(true);
+  const size_t n = g.r.calls.size();
+  // Rounds count completed passes, and the search stopped mid-pass: the
+  // first grid dwell may come after one and a half passes.
+  for (int i = 0; i < 3; ++i) g.s.run_once();
+  for (size_t i = n; i < g.r.calls.size(); ++i)
+    CHECK(g.r.calls[i] == "retune 136" || g.r.calls[i] == "retune 144");
+}
+
 TEST(auto_unlinked_dwell_is_burst_then_quiet_observe_on_every_member) {
   Rig g(two()); g.s.set_op(136); g.s.set_search(true);
   g.s.run_once();                          // 136: settle(W) burst(BW) gap(W) observe(QW)

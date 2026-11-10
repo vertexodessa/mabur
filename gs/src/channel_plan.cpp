@@ -1,5 +1,7 @@
 #include "channel_plan.h"
 
+#include "mabur/ht40.h"
+
 namespace maburgs {
 
 const char* to_string(MoveReason r) {
@@ -66,7 +68,7 @@ void ChannelPlan::set_want(double now_ms, uint8_t ch) {
 
 void ChannelPlan::link_found(double now_ms, uint8_t x) {
   now_ms_ = now_ms;
-  if (hopping_ || x == op_ || !member(x)) return;
+  if (hopping_ || x == op_ || !(member(x) || mabur::channel_5g(x))) return;
   events_.push_back(MoveEvent{now_ms, -1, op_, x, MoveReason::LinkFound});
   op_ = x;
 }

@@ -180,8 +180,26 @@ TEST(link_found_moves_op_for_every_card_and_logs) {
   CHECK(ev[0].reason == MoveReason::LinkFound && ev[0].card == -1 && ev[0].from == 136 &&
         ev[0].to == 149);
   p.link_found(20, 149);                      // already there
-  p.link_found(20, 112);                      // not a member
+  p.link_found(20, 68);                       // neither a member nor a grid channel
   CHECK(p.op() == 149 && p.take_events().empty());
+}
+
+// The scout's grid search found the drone on a grid channel outside the
+// set: the link forms there and is due to move back to want. Revert (members
+// only): a drone another GS left off the set is never linked.
+TEST(link_found_takes_a_grid_channel_outside_the_set_and_relocation_is_due) {
+  ChannelPlan p(C(2));
+  p.tick(0, false);
+  p.link_found(10, 100);
+  CHECK(p.op() == 100 && p.desired(0) == 100 && p.desired(1) == 100);
+  CHECK(p.want() == 136);
+  p.tick(20, true);
+  CHECK(p.relocate_due());
+  p.set_want(30, 100);                        // a failed relocation cannot adopt it
+  CHECK(p.want() == 136);
+  p.hop_order(40, 136, 1);
+  p.hop_confirmed(200);
+  CHECK(p.op() == 136 && !p.relocate_due());
 }
 
 TEST(relocate_due_truth_table) {

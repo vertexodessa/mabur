@@ -28,6 +28,11 @@ struct ScoutCfg {
   int busy_dbm = -83;
   double blocked_pct = 1e9;
   double leak_per_frame = 1.0;     // RankSample::leak per TX-card frame sent during an observe
+  // Search: after this many full passes over the set with no link, every
+  // other dwell is a DISC burst on a 5 GHz grid channel outside the set
+  // (mabur::channel_5g), where a GS that moved the drone off the set left
+  // it. 0 = the set only.
+  int grid_after_rounds = 0;
 };
 
 struct ScoutDwell {
@@ -50,7 +55,9 @@ struct ScoutDwell {
 //
 //  - search (link down): sweep the set, bursting DISC (beaconing() true for
 //    search_ms) on every member dwell so the drone can be FOUND wherever
-//    it is. Bursts happen only when search && the dwell channel is a member.
+//    it is. Bursts happen only when search && the dwell channel is a member;
+//    past grid_after_rounds passes, every other dwell bursts on a grid
+//    channel outside the set instead (burst only, never observed or ranked).
 //    set_search_observe(true) (an observe lease while unlinked) also turns
 //    the dwell's own NHM read on for these search dwells, same as a
 //    measuring dwell -- quiet() still holds the TX card's own DISC for the
@@ -177,6 +184,9 @@ class ChannelScout {
   bool member_(uint8_t ch) const;
   int eff_min_rounds_() const;
   void park_();
+  bool grid_due_() const;
+  std::vector<uint8_t> grid_channels_() const;
+  bool grid_dwell_();
   bool step_dwell_(bool burst_ok, bool observe);
   bool skip_op_(uint8_t ch) const;
   bool op_ranked_locked_(int mr) const;   // mu_ held
@@ -216,6 +226,13 @@ class ChannelScout {
   int round_dwells_ = 0;     // under mu_: dwells taken this round (bounds a dead member)
   std::vector<RankSample> round_samples_;   // under mu_
   int64_t t0_ = -1;          // run thread only: one-card prelude start (first run_once(), or a re-armed prelude)
+  // Run thread only: the grid search. search_round0_ is rounds() when the
+  // search last started (or the schedule restarted); grid_turn_ alternates
+  // set and grid dwells; grid_i_ walks the grid channels.
+  bool searching_ = false;
+  uint64_t search_round0_ = 0;
+  bool grid_turn_ = false;
+  size_t grid_i_ = 0;
 };
 
 }  // namespace maburgs

@@ -234,6 +234,12 @@ bool ChannelScout::run_once() {
     sched_ = devourer::chanmig::ScanScheduler(plan_for(cfg_));
     rounds_.store(sched_.rounds_complete(), std::memory_order_release);
   }
+  // The grid waits grid_after_rounds passes from the search's start, or
+  // from a restarted schedule (rounds() back below the mark).
+  const bool search = search_.load(std::memory_order_acquire);
+  if ((search && !searching_) || sched_.rounds_complete() < search_round0_)
+    search_round0_ = sched_.rounds_complete();
+  searching_ = search;
   if (!has_work_()) {
     if (working_.load(std::memory_order_acquire)) park_();
     int m = kRoundMeasured;   // a round that just ended is over once parked
@@ -267,7 +273,44 @@ bool ChannelScout::run_once() {
     sleep_(cfg_.beacon_period_ms);
     if (!has_work_()) return true;
   }
+  if (grid_turn_ && grid_due_()) {
+    grid_turn_ = false;
+    return grid_dwell_();
+  }
+  grid_turn_ = true;
   return step_dwell_(/*burst_ok=*/true, measuring_() || search_observe_on_());
+}
+
+bool ChannelScout::grid_due_() const {
+  return cfg_.grid_after_rounds > 0 && search_.load(std::memory_order_acquire) &&
+         sched_.rounds_complete() >= search_round0_ + static_cast<uint64_t>(cfg_.grid_after_rounds);
+}
+
+// The 5 GHz grid channels the card can sit on at its width (at 40 those
+// with a pair), minus the set and op.
+std::vector<uint8_t> ChannelScout::grid_channels_() const {
+  const bool w40 = link_width_mhz() == 40;
+  const uint8_t op = op_.load(std::memory_order_acquire);
+  std::vector<uint8_t> out;
+  for (int c = 36; c <= 165; ++c) {
+    const auto ch = static_cast<uint8_t>(c);
+    if (!mabur::channel_5g(ch) || (w40 && mabur::ht40_offset(ch) == 0)) continue;
+    if (member_(ch) || ch == op) continue;
+    out.push_back(ch);
+  }
+  return out;
+}
+
+// One grid dwell: retune, settle, DISC burst, gap. Its DISC proposes the
+// channel it is sent on, like a member's, so a drone there acks to stay and
+// the link forms there (ChannelPlan::link_found); the boot pick's
+// relocation then brings it back to the set.
+bool ChannelScout::grid_dwell_() {
+  const std::vector<uint8_t> grid = grid_channels_();
+  if (grid.empty()) return step_dwell_(/*burst_ok=*/true, measuring_() || search_observe_on_());
+  const uint8_t ch = grid[grid_i_++ % grid.size()];
+  (void)dwell(ch, sched_.rounds_complete(), /*burst=*/true, /*observe=*/false);
+  return true;
 }
 
 bool ChannelScout::dwell(uint8_t ch, uint64_t round, bool burst, bool observe) {
