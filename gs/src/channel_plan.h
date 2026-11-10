@@ -60,8 +60,10 @@ class ChannelPlan {
   // accepting the channel the link is on, or wanting a pick while linked.
   void set_want(double now_ms, uint8_t ch);
   // The ack that opened the session was heard on x: the link forms there.
-  // op_ = x for every card, M all <op> <x> link_found. x == op_, not a
-  // member, or a hop in flight: no-op.
+  // op_ = x for every card, M all <op> <x> link_found. x may be a 5 GHz grid
+  // channel outside the set (the scout's grid search found the drone there;
+  // relocate_due() then brings the link back to want_). x == op_, neither a
+  // member nor a grid channel, or a hop in flight: no-op.
   void link_found(double now_ms, uint8_t x);
   // In session, no hop in flight, and the link is not where it should be.
   bool relocate_due() const { return in_session_ && !hopping_ && op_ != want_; }
