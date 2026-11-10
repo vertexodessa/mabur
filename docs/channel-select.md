@@ -32,6 +32,15 @@ never found) or never reach the pick (the drone ignores a hop order to a
 channel outside its set, so every relocation fails). No loader can check
 this across the two devices; it is an operator rule.
 
+Palianytsia: the drone also follows the GS to any 5 GHz grid channel
+outside its set and parks there on the next boot (`mabur::channel_5g`), so
+a drone another GS moved off the set sits where this GS's set never goes.
+The search covers that: after `grid_after_rounds` (2) passes over the set
+with no link, every other search dwell bursts DISC on a grid channel
+outside the set. The link forms where the drone acks, and the boot pick's
+relocation hops it back to `want`, a member, which the drone then
+remembers.
+
 **The default set `[40, 64, 112, 144]` is provisional** until bench
 row 8 runs (`maburcal` on 64 and 112; swap 64 for 128 if it fails — see
 "Open items"). Both bundles carry the same note.
@@ -221,6 +230,7 @@ the card is tuned 40, so one dwell reads the whole pair (`docs/bw40.md`
 |---|---|---|
 | retune + settle | always | `FastRetune(member)` at the card's width, `settle_ms` |
 | **search burst** | link down AND the dwell channel is a member | send DISC proposing that channel every beacon period for `search_ms`; listen for the ack |
+| **grid burst** | link down, `grid_after_rounds` passes done, every other dwell | the same burst on the next 5 GHz grid channel outside the set; no observe |
 | gap | after a burst | one beacon period, so the card's own TX is out of its receiver |
 | discard read | measuring | zero the delta counters before the observe |
 | **observe** | pick open (auto) | silent `dwell_ms`, read FA/CCA/own/foreign/NHM |
