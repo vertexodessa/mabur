@@ -38,6 +38,7 @@ void FrameStream::push_fragment(uint8_t sid, const uint8_t* pkt, size_t len,
   Slot& s = slots_[key];
   if (s.chunks.empty()) { s.sid = sid; s.fseq = fseq; s.first_ms = now_ms;
                           s.last_progress_ms = now_ms; s.count = count; }
+  if (arr.retx && s.chunks.find(idx) == s.chunks.end()) s.lat.retx_fill = true;
   s.chunks[idx].assign(pkt + 6, pkt + len);
   if (arr.have_sw_seq && (!s.have_seq_at_max || idx > s.max_idx)) {
     s.max_idx = idx;

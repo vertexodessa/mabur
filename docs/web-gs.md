@@ -1104,6 +1104,10 @@ sink) and `osd_screens` (OSD screens handed to the page); see MSP OSD below.
 `trunc` counts truncated AUs of both layers. `trunc_base` is the sid-0
 share of it (Debug tab Counters, `trunc base`). That is the layer the NACK
 protects, and the one whose loss smears until the next GDR/IDR.
+`nack_saved` counts complete sid-0 AUs with a fragment that was new when a
+NACK retransmit body delivered it (directly, or recovered by FEC on that
+body's symbol): an upper bound on the frames the NACK saved, since repairs
+arriving later could have recovered the same symbols.
 
 `salvaged` (stats key `salvaged`, `WebGs::Stats::aus_salvaged`) counts AUs
 the core rebuilt by H.265 slice salvage (`docs/slices.md`): a truncated AU
