@@ -1,8 +1,8 @@
 #pragma once
 // The wide-TX receive-gain floor sweep (docs/calibration.md "The floor
 // sweep"): the one rule both ends share -- which floors are tried, how long,
-// what passes, the margin the written value carries, and how the drone's
-// SweepDone carries the result. Pure; no I/O.
+// what passes, which value is written for the edge found, and how the
+// drone's SweepDone carries the result. Pure; no I/O.
 //
 // What is measured: a Jaguar3 card tuned to 40 MHz on a quiet channel can
 // park its receiver where the secondary 20 MHz never reads idle, and its
@@ -53,9 +53,11 @@ constexpr uint32_t kFloorConfirmMs = 8000;
 // bounds the sweep (and the GS's silent window) at about 71 s.
 constexpr int kFloorMaxConfirms = 2;
 constexpr uint32_t kFloorPassPct = 95;
-// What is written: the lowest confirmed value plus this many IGI steps
-// (about 1 dB each of the drone's uplink sensitivity while 40 MHz flies).
+// The unit's edge plus this many IGI steps (about 1 dB each of the drone's
+// uplink sensitivity while 40 MHz flies) is what the unit needs.
 constexpr int kFloorMarginSteps = 4;
+// devourer's default floor, what the bundle's drone config ships.
+constexpr uint8_t kFloorDefault = 0x35;
 
 // lo, lo + kFloorStep, ... up to hi, at most kFloorMaxCandidates; empty for
 // a range outside [1, kFloorMax] or upside down.
@@ -88,8 +90,18 @@ inline bool floor_seconds_pass(const std::vector<uint32_t>& per_second, uint32_t
          static_cast<uint64_t>(ref) * kFloorPassPct;
 }
 
-inline uint8_t floor_with_margin(uint8_t found) {
-  return static_cast<uint8_t>(std::min<int>(found + kFloorMarginSteps, kFloorMax));
+// The value written for a unit whose lowest confirmed floor is `edge`:
+// edge + kFloorMarginSteps, never under kFloorDefault, at most kFloorMax.
+// Calibration raises the floor for a unit that needs more than the default
+// and otherwise leaves the default; it never lowers it. On one RTL8822E at
+// 40 MHz (edge 0x24) floors 0x28 and 0x35 gave the same video (capture to
+// complete AU p50 24 ms, p90 27-28 ms) but the drone took 62 % and 73 % of
+// the GS's RCFs at 0x28 against 93 % and 98 % at 0x35: the lower floor
+// hears the close-range uplink worse. What a lower floor buys at long
+// range is unmeasured, so the policy stays here, in one place.
+inline uint8_t floor_to_write(uint8_t edge) {
+  const int need = std::min<int>(edge + kFloorMarginSteps, kFloorMax);
+  return static_cast<uint8_t>(std::max<int>(need, kFloorDefault));
 }
 
 // The floor sweep as the GS commands it: candidates kFloorLo..kFloorHi in
