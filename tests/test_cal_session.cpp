@@ -1406,4 +1406,158 @@ TEST(floor_rows_land_in_the_cal_log) {
   CHECK(ls[5] == "L 2484 34 100 53");  // edge 0x22, the default written
 }
 
+
+// ---- both widths in one run -------------------------------------------------
+
+namespace {
+
+// Runs power20 of a run started at 0 through its apply and verify; returns
+// the next sweep's SweepCmd, offered at `t`.
+std::optional<cal::SweepCmd> pass_power20(CalSession& s, uint32_t nonce, uint64_t t = 100000) {
+  run_power(s, nonce, 0, 20, kWalls, 0);
+  s.on_mav(cal::Applied{nonce, 0, 20, true, ""}, 100);
+  return as<cal::SweepCmd>(s.due_mav(t));
+}
+
+CalSession wide_session() {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  return s;
+}
+
+}  // namespace
+
+TEST(cal_width_holds_the_cards_at_40_only_for_a_40_mhz_sweep) {
+  CalSession s = wide_session();
+  std::string err;
+  CHECK(s.cal_width() == 0);
+  REQUIRE(s.start(40, {{Kind::Power, 20}, {Kind::Floor, 40}}, 0, &err));
+  CHECK(s.cal_width() == 0);
+  const auto cmd = pass_power20(s, 40);
+  REQUIRE(cmd.has_value());
+  CHECK(cmd->kind == Kind::Floor);
+  CHECK(s.cal_width() == 40);
+  ack(s, 40, 1, 100010);
+  CHECK(s.cal_width() == 40);
+  s.on_mav(floor_done(40, 1, 0x24, 3), 130000);
+  REQUIRE(as<cal::ApplyCmd>(s.due_mav(130010)).has_value());
+  CHECK(s.cal_width() == 40);
+  s.on_mav(cal::Applied{40, 1, 40, true, ""}, 130020);
+  CHECK(s.state() == State::Done);
+  CHECK(s.cal_width() == 0);
+}
+
+TEST(no_pair_skips_the_40_mhz_part_and_keeps_the_20_mhz_one) {
+  CalSession s = wide_session();
+  std::string err;
+  REQUIRE(s.start(41, {{Kind::Power, 20}, {Kind::Floor, 40}, {Kind::Power, 40},
+                       {Kind::Capacity, 40}},
+                  0, &err));
+  REQUIRE(pass_power20(s, 41).has_value());
+  ack(s, 41, 1, 100010, kFlags, cal::AckResult::NoPair);
+  const auto snap = s.snapshot();
+  CHECK(snap.state == State::Done);
+  CHECK(snap.width[0].applied);
+  CHECK(snap.width[1].skipped.find("no 40 MHz pair") != std::string::npos);
+  CHECK(snap.width[1].skipped.rfind("floor: ", 0) == 0);
+  CHECK(snap.floor.note == "no 40 MHz pair");
+  CHECK(s.cal_width() == 0);
+  // The drone's run is closed at once, as at any other Done.
+  CHECK(as<cal::Abort>(s.due_mav(100020)).has_value());
+}
+
+TEST(no_floor_passing_skips_the_40_mhz_sweeps_after_it) {
+  CalSession s = wide_session();
+  std::string err;
+  REQUIRE(s.start(42, {{Kind::Power, 20}, {Kind::Floor, 40}, {Kind::Power, 40}}, 0, &err));
+  REQUIRE(pass_power20(s, 42).has_value());
+  ack(s, 42, 1, 100010);
+  s.on_mav(floor_done(42, 1, 0, 12), 170000);
+  const auto snap = s.snapshot();
+  CHECK(snap.state == State::Done);
+  CHECK(snap.width[0].applied);
+  CHECK(snap.width[1].skipped == "floor: no floor passed");
+  CHECK(!snap.width[1].have_walls);
+}
+
+TEST(a_refused_40_mhz_apply_leaves_the_run_done_with_40_uncalibrated) {
+  CalSession s = wide_session();
+  std::string err;
+  REQUIRE(s.start(43, {{Kind::Power, 20}, {Kind::Power, 40}, {Kind::Capacity, 40}}, 0, &err));
+  REQUIRE(pass_power20(s, 43).has_value());
+  run_power(s, 43, 1, 40, kWalls, 100300);
+  s.on_mav(cal::Applied{43, 1, 40, false, "config line not found"}, 100400);
+  const auto snap = s.snapshot();
+  CHECK(snap.state == State::Done);
+  CHECK(snap.fail_reason.empty());
+  CHECK(snap.width[0].applied);
+  CHECK(!snap.width[1].applied);
+  CHECK(snap.width[1].skipped == "power40: apply refused by the drone: config line not found");
+}
+
+TEST(a_40_mhz_ack_timeout_after_20_is_skipped_but_alone_still_fails) {
+  CalSessionCfg cfg;
+  {
+    CalSession s = wide_session();
+    std::string err;
+    REQUIRE(s.start(44, {{Kind::Power, 20}, {Kind::Power, 40}}, 0, &err));
+    REQUIRE(pass_power20(s, 44).has_value());
+    s.due_mav(100000 + cfg.ack_timeout_ms);
+    CHECK(s.state() == State::Done);
+    CHECK(s.snapshot().width[1].skipped == "power40: calibration ack timeout");
+  }
+  {
+    CalSession s = wide_session();
+    std::string err;
+    REQUIRE(s.start(45, {{Kind::Power, 40}}, 0, &err));
+    REQUIRE(s.due_mav(0).has_value());
+    s.due_mav(cfg.ack_timeout_ms);
+    CHECK(s.state() == State::Failed);
+    CHECK(s.snapshot().width[1].skipped.empty());
+  }
+}
+
+TEST(a_refused_40_mhz_ack_after_20_is_skipped) {
+  CalSession s = wide_session();
+  std::string err;
+  REQUIRE(s.start(46, {{Kind::Power, 20}, {Kind::Power, 40}}, 0, &err));
+  REQUIRE(pass_power20(s, 46).has_value());
+  ack(s, 46, 1, 100010, kFlags, cal::AckResult::Busy);
+  CHECK(s.state() == State::Done);
+  CHECK(s.snapshot().width[1].skipped == "power40: sweep refused by the drone: busy");
+}
+
+TEST(a_refused_floor_apply_skips_the_40_mhz_part) {
+  CalSession s = wide_session();
+  std::string err;
+  REQUIRE(s.start(47, {{Kind::Power, 20}, {Kind::Floor, 40}, {Kind::Power, 40}}, 0, &err));
+  REQUIRE(pass_power20(s, 47).has_value());
+  ack(s, 47, 1, 100010);
+  s.on_mav(floor_done(47, 1, 0x24, 3), 130000);
+  REQUIRE(as<cal::ApplyCmd>(s.due_mav(130010)).has_value());
+  s.on_mav(cal::Applied{47, 1, 40, false, "no wide_tx_igi_floor key"}, 130020);
+  const auto snap = s.snapshot();
+  CHECK(snap.state == State::Done);
+  CHECK(!snap.floor.applied);
+  CHECK(snap.width[1].skipped == "floor: floor apply refused by the drone: no wide_tx_igi_floor key");
+}
+
+TEST(skipped_rows_land_in_the_cal_log) {
+  const auto dir = fresh_dir("cal_session_skip_log");
+  CalLog log(dir);
+  log.header();
+  CalSession s(CalSessionCfg{}, &log);
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(48, {{Kind::Power, 20}, {Kind::Floor, 40}}, 0, &err));
+  REQUIRE(pass_power20(s, 48).has_value());
+  ack(s, 48, 1, 100010, kFlags, cal::AckResult::NoPair);
+  log.flush();
+  const auto ls = cal_log_lines(dir);
+  REQUIRE(!ls.empty());
+  CHECK(ls.back() == "N 40 floor: ch 0 has no 40 MHz pair");
+}
+
 MTEST_MAIN

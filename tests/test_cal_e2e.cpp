@@ -36,6 +36,7 @@
 #include "mtest.h"
 
 #include "cal_apply.h"
+#include "cal_control.h"
 #include "cal_link.h"
 #include "cal_picker.h"
 #include "cal_session.h"
@@ -192,6 +193,19 @@ struct SimPower : mabur::CalSweep::PowerCtl {
   }
   // The index a frame actually flies at right now.
   int on_air_idx() const { return override_idx >= 0 ? override_idx : kAnchor; }
+  // The radio's tuned width (DevicePowerCtl's GetSelectedChannel); 0 = a
+  // seam that does not retune, as every run before the both-widths plan.
+  uint8_t width = 0;
+  bool has_pair = true;  // the channel has a 40 MHz pair (165 has none)
+  std::vector<uint8_t> tunes;
+  uint8_t tuned_width() override { return width; }
+  int tune_width(uint8_t bw) override {
+    if (bw == width) return 0;
+    if (bw == 40 && !has_pair) return -1;
+    width = bw;
+    tunes.push_back(bw);
+    return 1;
+  }
 };
 
 // Every frame RadioTx builds (radiotap | dot11 | body), for the harness to
@@ -286,6 +300,16 @@ struct Kit {
   std::vector<std::pair<uint8_t, uint8_t>> dead;
   // Random sweep-frame loss per GS card, percent: the frame never arrives.
   std::array<int, 2> card_loss_pct{0, 0};
+  // The width the link flies, which the GS's cards sit at unless the
+  // session holds them (CalSession::cal_width, ChannelCore::set_cal_width).
+  // A 40 MHz frame airs only from a drone tuned to 40 (or one whose seam
+  // does not retune) and is heard only by cards at 40.
+  uint8_t link_width = 40;
+  uint8_t gs_card_width() const { return gs.cal_width() ? gs.cal_width() : link_width; }
+  bool airs(uint8_t bw) const {
+    return bw != 40 || ((pwr.width == 0 || pwr.width == 40) && gs_card_width() == 40);
+  }
+  int unheard_40 = 0;
   std::mt19937 air_rng{777};
 
   // Simulated clock, ms. Both loops tick once per ms; a capacity dwell
@@ -550,6 +574,10 @@ struct Kit {
       const size_t body_len = f.size() - hdr;
       cal::CalFrameInfo info;
       if (!cal::parse_cal_payload(body, body_len, &info)) continue;
+      if (!airs(info.bw)) {
+        ++unheard_40;
+        continue;
+      }
       ++frames_on_air;
       if (info.kind == cal::Kind::Verify) {
         const auto key = std::make_pair(info.bw, info.rate);
@@ -657,8 +685,9 @@ mabur::BlastResult FakeCapacityCtl::blast(const uint8_t* frame, size_t len, uint
     }
     for (uint32_t n : r.per_second) r.offered += n;
     const std::vector<uint8_t> rx = with_fcs(frame, len);
+    if (kit->pwr.width == 20) r.per_second.assign(secs, 0);  // a 40 MHz frame cannot air at 20
     for (uint32_t ms = 0; ms < dwell_ms; ++ms) {
-      if (ms % 500 == 0)
+      if (ms % 500 == 0 && kit->airs(info.bw))
         REQUIRE(maburgs::route_cal_body(kit->gs, 0, rx.data(), rx.size(), -58, true, kit->t) ==
                 26 + len + 4);
       kit->gs_tick();
@@ -695,6 +724,10 @@ mabur::BlastResult FakeCapacityCtl::blast(const uint8_t* frame, size_t len, uint
   uint32_t sent = 0;
   for (uint32_t ms = 0; ms < dwell_ms; ++ms) {
     const uint32_t due = static_cast<uint32_t>(uint64_t{delivered} * (ms + 1) / dwell_ms);
+    if (!kit->airs(info.bw)) {
+      kit->unheard_40 += static_cast<int>(due - sent);
+      sent = due;
+    }
     for (; sent < due; ++sent) {
       REQUIRE(maburgs::route_cal_body(kit->gs, 0, rx.data(), rx.size(), -58, true, kit->t) ==
               air_bytes);
@@ -705,7 +738,7 @@ mabur::BlastResult FakeCapacityCtl::blast(const uint8_t* frame, size_t len, uint
     ++kit->t;
   }
   kit->drain_rx = rx;
-  kit->drain_total = offered - delivered;
+  kit->drain_total = kit->airs(info.bw) ? offered - delivered : 0;
   kit->drain_sent = 0;
   kit->drain_t0 = kit->t;
   kit->drain_ms = busy_ms - dwell_ms;
@@ -1169,6 +1202,91 @@ TEST(a_unit_with_no_passing_floor_keeps_its_config) {
   k.drain();
   CHECK(k.read() == std::string(kFixture));
   CHECK(k.cap.live_floor == k.boot_cfg.radio.wide_tx_igi_floor);
+}
+
+
+// ---- both widths on a link that flies 20 ----------------------------------
+
+// The bare start's plan on a CAP_CAL_WIDE drone: both ends go to 40 for the
+// floor and the 40 MHz sweeps and come back to 20, every table lands, and
+// the run fits the drone's hard cap.
+TEST(the_default_plan_calibrates_both_widths_from_a_20_mhz_link) {
+  Kit k("both");
+  k.link_width = 20;
+  k.pwr.width = 20;
+  k.cap.floor_edge = 0x24;
+  k.cap.marginal = 0x22;
+  const auto plan = maburgs::default_sweeps(20, maburgs::LadderCfg{}, /*peer_wide=*/true);
+  REQUIRE(plan.size() == 5);
+  REQUIRE(k.start(plan));
+  k.run();
+  REQUIRE(k.gs.state() == State::Done);
+  if (verbose()) std::printf("  default plan from 20: Done at %.1f s\n", k.t / 1000.0);
+  CHECK(k.t < mabur::CalSweepCfg{}.hard_cap_ms);
+  const auto snap = k.gs.snapshot();
+  CHECK(snap.width[0].applied);
+  CHECK(snap.width[1].applied);
+  CHECK(snap.width[1].skipped.empty());
+  CHECK(snap.floor.rep.floor == 0x24);
+  CHECK(snap.floor.written == 0x35);
+  // Nothing at 40 went unheard: both ends were at 40 for every 40 MHz frame.
+  CHECK(k.unheard_40 == 0);
+  CHECK(k.gs.cal_width() == 0);
+  k.drain();
+  CHECK(k.pwr.width == 20);
+  CHECK((k.pwr.tunes == std::vector<uint8_t>{40, 20}));
+  const auto c = k.loaded();
+  REQUIRE(c.radio.rate_walls_rel_20.has_value());
+  REQUIRE(c.radio.rate_walls_rel_40.has_value());
+  check_walls(*c.radio.rate_walls_rel_40, 40);
+  CHECK(c.radio.wide_tx_igi_floor == 0x35);
+}
+
+// A channel with no 40 MHz pair: the drone acks NoPair, the 40 MHz part is
+// skipped with its reason, and the 20 MHz tables are written.
+TEST(no_pair_keeps_the_20_mhz_results_and_says_why) {
+  Kit k("nopair");
+  k.link_width = 20;
+  k.pwr.width = 20;
+  k.pwr.has_pair = false;
+  REQUIRE(k.start({{cal::Kind::Power, 20}, {cal::Kind::Floor, 40}, {cal::Kind::Power, 40}}));
+  k.run();
+  REQUIRE(k.gs.state() == State::Done);
+  const auto snap = k.gs.snapshot();
+  CHECK(snap.width[0].applied);
+  CHECK(!snap.width[1].applied);
+  CHECK(snap.width[1].skipped == "floor: ch 36 has no 40 MHz pair");
+  CHECK(k.unheard_40 == 0);
+  k.drain();
+  CHECK(k.pwr.tunes.empty());
+  const auto c = k.loaded();
+  REQUIRE(c.radio.rate_walls_rel_20.has_value());
+  check_walls(*c.radio.rate_walls_rel_20, 20);
+  CHECK(!c.radio.rate_walls_rel_40.has_value());
+  CHECK(k.read().find("wide_tx_igi_floor") == std::string::npos);
+}
+
+// A floor that never holds: the 40 MHz sweeps after it are skipped (they
+// would measure a stalling transmitter), the 20 MHz tables stay written and
+// the drone goes back to 20.
+TEST(a_failed_floor_keeps_the_20_mhz_results_and_skips_40) {
+  Kit k("floorfail");
+  k.link_width = 20;
+  k.pwr.width = 20;
+  k.cap.floor_edge = 0x60;
+  REQUIRE(k.start({{cal::Kind::Power, 20}, {cal::Kind::Floor, 40}, {cal::Kind::Power, 40}}));
+  k.run();
+  REQUIRE(k.gs.state() == State::Done);
+  const auto snap = k.gs.snapshot();
+  CHECK(snap.width[0].applied);
+  CHECK(snap.width[1].skipped == "floor: no floor passed");
+  CHECK(!snap.width[1].have_walls);
+  k.drain();
+  CHECK(k.pwr.width == 20);
+  CHECK((k.pwr.tunes == std::vector<uint8_t>{40, 20}));
+  const auto c = k.loaded();
+  CHECK(c.radio.rate_walls_rel_20.has_value());
+  CHECK(!c.radio.rate_walls_rel_40.has_value());
 }
 
 MTEST_MAIN

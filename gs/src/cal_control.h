@@ -20,15 +20,26 @@
 
 namespace maburgs {
 
-// Every kind for every width the GS flies: 20 always, plus 40 iff the GS's
-// receiver width (ChannelCore::width_mhz(), derived from the ladder or a
-// static pin) is 40 AND some rung on its ladder actually uses it -- a GS
-// that can fly 40 but whose ladder never picks it would be calibrating a
-// width nothing lands on.
+// A peer advertising CAP_CAL_WIDE tunes itself to 40 for a 40 MHz sweep
+// and back (and the GS's cards follow, CalSession::cal_width), so a bare
+// start calibrates both widths whatever the link flies: power20, cap20,
+// the floor, power40, cap40 (the session's order). Otherwise every kind for
+// every width the GS flies: 20 always, plus 40 iff the GS's receiver width
+// (ChannelCore::width_mhz(), derived from the ladder or a static pin) is 40
+// AND some rung on its ladder actually uses it -- a GS that can fly 40 but
+// whose ladder never picks it would be calibrating a width nothing lands
+// on.
 inline std::vector<mabur::cal::SweepSpec> default_sweeps(uint8_t rx_width,
-                                                          const LadderCfg& ladder) {
+                                                          const LadderCfg& ladder,
+                                                          bool peer_wide = false) {
   std::vector<mabur::cal::SweepSpec> out = {{mabur::cal::Kind::Power, 20},
                                              {mabur::cal::Kind::Capacity, 20}};
+  if (peer_wide) {
+    out.push_back({mabur::cal::Kind::Floor, 40});
+    out.push_back({mabur::cal::Kind::Power, 40});
+    out.push_back({mabur::cal::Kind::Capacity, 40});
+    return out;
+  }
   const bool flies_40 =
       rx_width == 40 &&
       std::any_of(ladder.ladder.begin(), ladder.ladder.end(),
@@ -88,7 +99,8 @@ class CalControl {
   // computed by the caller from the live config); `rx_width` is the GS's
   // own receiver width (ChannelCore::width_mhz(), derived from the ladder
   // or a static pin -- there is no radio.width config key on the GS any
-  // more), which bounds what a `start power40`/`cap40` token may ask for.
+  // more), which bounds what a `start power40`/`cap40` token may ask for;
+  // the caller passes 40 for a CAP_CAL_WIDE peer, which retunes for them.
   void poll(CalSession& s, const std::vector<mabur::cal::SweepSpec>& defaults,
             uint8_t rx_width) {
     if (fd_ < 0) return;

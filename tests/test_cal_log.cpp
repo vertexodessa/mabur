@@ -347,4 +347,17 @@ TEST(floor_rows_list_each_candidate_tried_then_the_result) {
   CHECK(ls[5] == "L 2484 36 100 53");
 }
 
+
+TEST(skipped_rows_flatten_control_bytes) {
+  const auto d = fresh_dir("callog_skipped");
+  {
+    CalLog l(d);
+    l.header();
+    l.skipped(40, "power40: apply refused\nby the drone");
+  }
+  const auto ls = lines_of(d);
+  REQUIRE(ls.size() == 2);
+  CHECK(ls[1] == "N 40 power40: apply refused by the drone");
+}
+
 MTEST_MAIN

@@ -59,6 +59,9 @@ struct CapResult;
 //   L <ref_fps> <found> <confirm_pct> <written>  # one row per floor sweep;
 //                                                # found/written 0 = none
 //   A <bw> <0|1> <reason to end of line>          # one row per apply attempt
+//   N <bw> <why to end of line>                   # the rest of this width's
+//                                                 # sweeps skipped: it stays
+//                                                 # uncalibrated past what applied
 //
 // `pick` is one of auto|pinned|onecard|stayed -- the channel selection
 // outcome this run's R line was raised under; the string is opaque to this
@@ -203,6 +206,9 @@ class CalLog {
   // `reason` keeps its spaces -- this is the last field on the line, so
   // nothing after it needs delimiting.
   void applied(uint8_t bw, bool ok, const std::string& reason);
+  // A width's remaining sweeps skipped: `N <bw> <why to end of line>`,
+  // control bytes flattened as applied()'s reason is.
+  void skipped(uint8_t bw, const std::string& why);
 
   // Blocks until every record handed over so far is on disk. Call at the
   // end of a run (Done or Failed), and only there: LogWriter's own thread

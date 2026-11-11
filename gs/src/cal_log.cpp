@@ -143,6 +143,15 @@ void CalLog::applied(uint8_t bw, bool ok, const std::string& reason) {
   w_.line(s_, line.c_str(), line.size());
 }
 
+void CalLog::skipped(uint8_t bw, const std::string& why) {
+  if (s_ == LogWriter::kBadStream) return;
+  std::string clean = why;
+  for (char& c : clean)
+    if (static_cast<unsigned char>(c) < 0x20) c = ' ';
+  const std::string line = "N " + std::to_string(bw) + " " + clean;
+  w_.line(s_, line.c_str(), line.size());
+}
+
 void CalLog::floor(const mabur::cal::FloorReport& r, const std::vector<uint8_t>& cands,
                    uint8_t write) {
   if (s_ == LogWriter::kBadStream) return;
