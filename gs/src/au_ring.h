@@ -153,6 +153,11 @@ struct AuLatMeta {
   // retransmit filled the AU's header fragment, so the latency-anchor guard
   // must not trust this AU's arrival time as a clean anchor sample.
   bool hdr_retx = false;
+  // Some fragment of this AU was new when it arrived out of a NACK
+  // retransmit body (directly, or recovered by FEC on that body's symbol):
+  // a complete base AU with it is one the NACK may have saved. An upper
+  // bound: repairs arriving later could have recovered the same symbols.
+  bool retx_fill = false;
   // Slice salvage: FrameStream's verdict
   // for this AU. finish() turns slice.salvaged into kRecFlagSliceSalvaged;
   // the counts ride to AuLog through last_record(). Not in the SlotHdr.
