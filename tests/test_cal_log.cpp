@@ -336,7 +336,7 @@ TEST(floor_rows_list_each_candidate_tried_then_the_result) {
     CalLog l(d);
     l.header();
     l.sweep(2, mabur::cal::Kind::Floor, 40, 4000);
-    l.floor(r, mabur::cal::floor_candidates(mabur::cal::kFloorLo, mabur::cal::kFloorHi), 0x28);
+    l.floor(r, mabur::cal::floor_candidates(mabur::cal::kFloorLo, mabur::cal::kFloorHi), 0x35);
   }
   const auto ls = lines_of(d);
   REQUIRE(ls.size() == 6);
@@ -344,7 +344,7 @@ TEST(floor_rows_list_each_candidate_tried_then_the_result) {
   CHECK(ls[2] == "F 32 0");
   CHECK(ls[3] == "F 34 2484");
   CHECK(ls[4] == "F 36 2470");
-  CHECK(ls[5] == "L 2484 36 100 40");
+  CHECK(ls[5] == "L 2484 36 100 53");
 }
 
 MTEST_MAIN

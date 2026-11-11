@@ -87,6 +87,9 @@ struct FloorResult {
   bool have = false;  // its SweepDone arrived: `rep` is the drone's report
   mabur::cal::FloorReport rep{};
   std::vector<uint8_t> cands;  // the candidates the sweep commanded
+  // The lowest candidate passed: the unit never stalled in the range
+  // tried, so its edge (rep.floor) is "none found at or above" it.
+  bool below_range = false;
   uint8_t written = 0;         // the value sent to the drone; 0 = none
   bool applied = false;        // the drone adopted `written`
   // Why nothing was written, or the drone's note on the apply.

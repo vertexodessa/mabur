@@ -493,11 +493,11 @@ class TestReportV5(unittest.TestCase):
 
 # callog 6: GOOD5 with a floor sweep between the 20 and 40 MHz sweeps; 0x20
 # stalled, 0x22 held its dwell and then failed its confirmation, 0x24
-# confirmed and 0x28 was written.
+# confirmed and the default 0x35 was written.
 GOOD6 = (GOOD5.replace("callog 5", "callog 6", 1)
          .replace("S 3 power 40 20\n",
                   "S 6 floor 40 4000\nF 32 0\nF 34 2484\nF 36 2484\n"
-                  "L 2484 36 100 40\nA 40 1 \nS 3 power 40 20\n"))
+                  "L 2484 36 100 53\nA 40 1 \nS 3 power 40 20\n"))
 
 GOOD6_NONE = (GOOD5.replace("callog 5", "callog 6", 1)
               .replace("S 3 power 40 20\n",
@@ -510,11 +510,19 @@ class TestReportV6(unittest.TestCase):
 
     def test_floor_found_and_written(self):
         out = render(GOOD6)
-        self.assertIn("floor40: 0x24 passed (100% worst second confirmed), 0x28 written", out)
+        self.assertIn("floor40: floor edge 0x24 (100% worst second confirmed), 0x35 written", out)
         self.assertIn("0x20:0 0x22:2484 0x24:2484", out)
         # The floor rows open no width block and leave the 40 MHz table as it was.
         row0 = [l for l in out.splitlines() if l.startswith("mcs0")][0]
         self.assertIn("60", row0)
+
+    def test_never_stalled_reports_no_edge(self):
+        never = (GOOD5.replace("callog 5", "callog 6", 1)
+                 .replace("S 3 power 40 20\n",
+                          "S 6 floor 40 4000\nF 32 2484\nL 2484 32 100 53\n"
+                          "A 40 1 \nS 3 power 40 20\n"))
+        self.assertIn("floor40: floor edge none found at or above 0x20, 0x35 written",
+                      render(never))
 
     def test_no_floor_passed(self):
         out = render(GOOD6_NONE)
