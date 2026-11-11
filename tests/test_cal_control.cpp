@@ -239,4 +239,29 @@ TEST(binds_loopback_only) {
   CHECK(std::string(c.bound_address()) == "127.0.0.1");
 }
 
+
+TEST(default_sweeps_for_a_wide_peer_is_both_widths_whatever_the_link_flies) {
+  LadderCfg ladder;  // every rung 20
+  const auto sweeps = default_sweeps(/*rx_width=*/20, ladder, /*peer_wide=*/true);
+  REQUIRE(sweeps.size() == 5);
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string reply;
+  REQUIRE(CalControl::apply("start", s, &reply, sweeps, /*rx_width=*/40));
+  CHECK(reply == "ok started power20,cap20,floor,power40,cap40");
+}
+
+TEST(default_sweeps_for_a_wide_peer_loses_the_floor_on_a_narrow_session) {
+  // A drone that lost CAP_CAL_WIDE between composing and starting: the
+  // session drops the floor, power40/cap40 stay and are refused per sweep.
+  LadderCfg ladder;
+  const auto sweeps = default_sweeps(20, ladder, true);
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  std::string reply;
+  REQUIRE(CalControl::apply("start", s, &reply, sweeps, 40));
+  CHECK(reply == "ok started power20,cap20,power40,cap40");
+}
+
 MTEST_MAIN

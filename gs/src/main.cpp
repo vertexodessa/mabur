@@ -656,6 +656,7 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
   maburgs::CalSession cal_session(maburgs::CalSessionCfg{}, &*cal_log, &cal_picker);
   // Recomposed also after a live ladder swap (its hook zeroes the width).
   uint8_t cal_defaults_width = chan.width_mhz();
+  bool cal_defaults_wide = false;
   std::vector<mabur::cal::SweepSpec> cal_defaults =
       maburgs::default_sweeps(cal_defaults_width, vrx.ladder());
   maburgs::CalNarrator cal_narrator(cal_log_dir + "/cal.log");
@@ -1462,14 +1463,20 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
     cal_session.set_peer(
         mav_linked, mav_linked && (vrx.peer_caps() & mabur::rc::CAP_CALIBRATE),
         vrx.session_ctx());
-    cal_session.set_peer_wide(mav_linked && (vrx.peer_caps() & mabur::rc::CAP_CAL_WIDE));
+    const bool cal_wide = mav_linked && (vrx.peer_caps() & mabur::rc::CAP_CAL_WIDE);
+    cal_session.set_peer_wide(cal_wide);
     const uint8_t cal_width =
         maburgs::cal_effective_width(chan.width_mhz(), mav_linked, peer_agreed_width);
-    if (cal_width != cal_defaults_width) {
+    if (cal_width != cal_defaults_width || cal_wide != cal_defaults_wide) {
       cal_defaults_width = cal_width;
-      cal_defaults = maburgs::default_sweeps(cal_width, vrx.ladder());
+      cal_defaults_wide = cal_wide;
+      cal_defaults = maburgs::default_sweeps(cal_width, vrx.ladder(), cal_wide);
     }
-    cal_ctl.poll(cal_session, cal_defaults, cal_width);
+    // A CAP_CAL_WIDE drone tunes itself to 40 for a 40 MHz sweep, so any
+    // width may be asked for.
+    cal_ctl.poll(cal_session, cal_defaults, cal_wide ? 40 : cal_width);
+    // The cards follow the drone to 40 for a 40 MHz sweep and back after.
+    chan.set_cal_width(cal_session.cal_width());
     // Whatever the session offers goes out as is, never gated on
     // radio_silent(): the session offers only when the air is the GS's.
     // The one hold is a SweepCmd while a scout dwell begun just before the
