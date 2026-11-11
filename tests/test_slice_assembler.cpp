@@ -337,6 +337,21 @@ TEST(slice_count_over_64_is_rejected_before_narrowing) {
   CHECK(sa.slices() == 0);
 }
 
+TEST(slice_span_wrapping_to_zero_passes_through) {
+  // SPS width 2^31 = 2^25 CTBs; 128 rows per slice makes the uint32 span
+  // 2^32, which wraps to 0. The assembler refuses instead of dividing by it.
+  Au a = au(5);
+  a.chunks.erase(inner_chunk(a, 1));
+  Sps sps = a.t.sps();
+  sps.width = 1u << 31;
+  SliceAssembler sa(sps, a.t.pps(), 128, a.count, kHdr);
+  REQUIRE(sa.slices() == 1);
+  Out o;
+  sa.finish(a.chunks, o.sink());
+  CHECK(!sa.result().salvaged);
+  CHECK(sa.result().fallback == kSliceFbGeometry);
+}
+
 TEST(fallback_remainder_goes_to_raw_out_when_given) {   // ring v4 writer contract
   Au a = au(0);  // IDR: a hole makes it an islice passthrough
   const uint16_t c = chunk_of(a, offset_of(a, 2));
