@@ -413,9 +413,12 @@ the cost is zero.
   prod geometry, three channels within 0.5 %), giving 20 MHz `[0.93, 0.88,
   0.84, 0.80, 0.76, 0.76, 0.78, 0.76]` (singles below mcs4, agg6 above)
   and 40 MHz `[0.77, 0.75, 0.75, 0.75, 0.74, 0.77, 0.76, 0.75]` with agg6.
-- **The aggregation mode is per rung and per width**: `ampdu.min_mcs_20`
-  (bundle 4) / `ampdu.min_mcs_40` (bundle 2) — singles below the floor,
-  the configured aggregate at and above (`drone/src/ampdu_policy.h`,
-  switched live by `RealActuator::apply_op`). The bundle ladder is six
-  20 MHz rungs, mcs0-5, so mcs0-3 fly singles and mcs4/5 aggregate. Do not
-  read a fixed A-MPDU cost into the model.
+- **The bundle ships aggregation off** (`ampdu.max_num = 0`): every rung
+  flies singles. With `max_num` above 0 the mode is per rung and per
+  width: `ampdu.min_mcs_20` (bundle 4) / `ampdu.min_mcs_40` (bundle 2) —
+  singles below the floor, the configured aggregate at and above
+  (`drone/src/ampdu_policy.h`, switched live by
+  `RealActuator::apply_op`). The bundle's table entries for mcs4-7 at
+  20 MHz and the whole 40 MHz table are agg6 numbers; a unit's `maburcal`
+  sweep measures the mode it flies. Do not read a fixed A-MPDU cost into
+  the model.
