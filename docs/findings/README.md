@@ -16,6 +16,7 @@ merged), and get a row added to the table below.
 
 | Date | Record | Question → answer |
 |---|---|---|
+| 2026-11-11 | [2026-11-11-wide-tx-floor](2026-11-11-wide-tx-floor.md) | Why is 40 MHz video 30 ms later and lossier than 20 MHz on a clean bench link? → The 8822E unit holds its 40 MHz frames without a receive-gain floor (0 frames/s under 0x22, clean from 0x24), and maburd compiled the floor off; it is a config key with default 0x35 now. |
 | 2026-11-11 | [2026-11-11-nack-residual](2026-11-11-nack-residual.md) | Why does a clean bench link leave its top rung every few seconds with the NACK on? → A symbol a retransmit filled was booked as residual loss, and the resends race the FEC repairs; the ladder's residual input is the decoder's abandonment alone now. |
 | 2026-11-11 | [2026-11-11-singles-capacity](2026-11-11-singles-capacity.md) | What does the air deliver per MCS with single frames, the mode the bundle flies? → 0.90 down to 0.68 of nominal at 20 MHz and 0.87 down to 0.54 at 40 MHz with data frames; linkbench had been sending probe-request frames, which ride another queue and never aggregate. |
 | 2026-11-08 | [2026-11-08-frame-window](2026-11-08-frame-window.md) | Should a frame's repair window follow its size? → Model and host A/B say yes with a floor of 64 and a cap of 128; drone CPU and the bench A/B are still owed. |
