@@ -38,6 +38,7 @@
 #include <optional>
 #include <vector>
 
+#include "mabur/cal_floor.h"
 #include "mabur/cal_proto.h"
 #include "mabur/cal_wire.h"
 #include "mabur/profile.h"
@@ -67,6 +68,10 @@ struct CalSweepCfg {
   // measures throughput at the size real video frames actually fly at,
   // not the fixed 64-byte Power/Verify stamp.
   size_t capacity_frame_len = 1405;
+  // Whether the radio has a runtime wide-TX receive-gain floor
+  // (IRadio::SetWideTxIgiFloor): without one a Floor sweep is refused
+  // Unsupported.
+  bool floor_ok = true;
 };
 
 // One Capacity point's result: how many frames the blast offered and what
@@ -76,6 +81,9 @@ struct CalSweepCfg {
 struct BlastResult {
   uint32_t offered = 0;
   uint8_t blocked_pct = 0;
+  // Frames sent in each whole second of the dwell, by when the send
+  // returned; a Floor point is judged on its worst second (cal_floor.h).
+  std::vector<uint32_t> per_second;
 };
 
 // Sweeps the cells of one SweepCmd at a time -- Power, Verify (armed
@@ -122,12 +130,27 @@ class CalSweep {
     virtual ~CapacityCtl() = default;
     virtual bool set_point(uint8_t mcs, uint8_t bw) = 0;
     virtual BlastResult blast(const uint8_t* frame, size_t len, uint32_t dwell_ms) = 0;
+    // The wide-TX receive-gain floor (Floor sweep only); false where the
+    // radio has none.
+    virtual bool set_wide_floor(uint8_t floor) {
+      (void)floor;
+      return false;
+    }
+    // Puts back the floor the drone flies with outside the sweep: the
+    // configured one, or what an apply earlier in the run wrote.
+    virtual bool restore_wide_floor() { return false; }
   };
 
   explicit CalSweep(CalSweepCfg cfg) : cfg_(cfg) {}
 
-  // Accepts a sweep command (Power or Capacity -- Verify never arrives
-  // this way, see arm_verify). A brand-new nonce starts a fresh run
+  // Accepts a sweep command (Power, Capacity or Floor -- Verify never
+  // arrives this way, see arm_verify). A kind this drone does not run (a
+  // Floor sweep without CalSweepCfg::floor_ok or at 20 MHz, Verify, or a
+  // kind newer than the build) is acked Unsupported with nothing touched:
+  // no run opens and an open one carries on. A Floor sweep walks
+  // cal_floor.h's candidates through CapacityCtl (set_point, set_wide_floor,
+  // blast) and reports in a SweepDone packed by pack_floor_done; it ends
+  // with restore_wide_floor(). A brand-new nonce starts a fresh run
   // (state -> Sweeping, cell cursor reset, the chip's anchor captured
   // right here, synchronously), UNLESS that nonce is the one this engine
   // just closed (hard cap, abort, or the await timeout) -- a straggler or
@@ -304,6 +327,10 @@ class CalSweep {
   void build_verify_cells(const std::array<int, 8>& park_rel);
   void pump_power_verify(uint64_t now_ms, RadioTx& tx, PowerCtl& pwr);
   void pump_capacity(uint64_t now_ms, CapacityCtl& cap);
+  void pump_floor(uint64_t now_ms, CapacityCtl& cap);
+  // A command this drone does not run: refused Unsupported, nothing
+  // touched (see on_cmd).
+  bool supported(const cal::SweepCmd& c) const;
   void finish_sweep(uint64_t now_ms);
   void close_session(PowerCtl& pwr);
   // Milliseconds left until sweep_start_ms_, clamped to 0 once it has
@@ -382,6 +409,15 @@ class CalSweep {
   // SweepDone is ever built from these).
   std::array<uint32_t, 8> offered_{};
   std::array<uint8_t, 8> blocked_pct_{};
+
+  // Floor sweep (cal_floor.h): the candidates, where the walk is, and
+  // what it has found so far.
+  enum class FloorPhase { Ref, Cand, Confirm, Done };
+  FloorPhase floor_phase_ = FloorPhase::Ref;
+  std::vector<uint8_t> floor_cands_;
+  size_t floor_i_ = 0;
+  int floor_confirms_ = 0;
+  cal::FloorReport floor_report_{};
 
   std::optional<cal::SweepDone> pending_done_;
   // The finished sweep's SweepDone while it is still being repeated (see

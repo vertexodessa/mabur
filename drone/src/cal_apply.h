@@ -79,6 +79,10 @@ struct CalWrite {
                                       // not swept itself
   std::array<double, 8> eff{};       // 0 = leave
   std::string cal_flags = "ldpc+stbc";
+  // radio.wide_tx_igi_floor, measured by a floor sweep; a write of its own
+  // (bw 40, neither walls nor efficiency).
+  bool has_floor = false;
+  int floor = 0;
 };
 
 // Which keys patch_toml actually found-and-rewrote or created. A flag
@@ -99,7 +103,7 @@ struct CalWrite {
 struct PatchStatus {
   bool walls = false, cal_flags = false, legacy_wall_rel = false,
        power_mode = false, eff = false, inserted_walls = false,
-       inserted_cal_flags = false;
+       inserted_cal_flags = false, floor = false;
   uint8_t borrowed_walls = 0, unfilled_walls = 0;
 };
 
@@ -135,7 +139,9 @@ enum class ApplyResult {
 // with, not a per-rate value with its own sentinel). legacy_wall_rel is
 // shared by both widths: it is only ever repatched from a 20 MHz write, or
 // from a 40 MHz write on a file with no rate_walls_rel_20 line of its own.
-// power_mode is set to "offset" whenever has_walls is set. If `status` is
+// power_mode is set to "offset" whenever has_walls is set. With has_floor,
+// radio.wide_tx_igi_floor is rewritten, or inserted after power_mode in a
+// file that has none (the key's default would otherwise stay). If `status` is
 // non-null, it is filled in with which keys were actually touched -- see
 // PatchStatus. Never throws; a key it can neither find nor insert is
 // simply left unmatched in `*status` for the caller to act on.
@@ -145,7 +151,8 @@ std::string patch_toml(const std::string& text, const CalWrite& w,
 // Mirrors config.cpp: every determined rel in [-64,63] and
 // rel - lround(margin_db*4) >= -64, for every swept rate
 // (walls[r] != kWallUndetermined) and for legacy_wall (if determined);
-// every determined eff (eff[r] != 0) in [0.05, 1.0]. On failure, *why
+// every determined eff (eff[r] != 0) in [0.05, 1.0]; with has_floor, the
+// floor in [1, 127] (0 would switch the floor off). On failure, *why
 // names the offending key, matching config.cpp's message so a walls
 // refusal reads the same as a boot failure would (the eff floor is this
 // file's own sanity bound -- the loader itself only requires (0,1]).

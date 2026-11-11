@@ -4,9 +4,10 @@
 // width) it was sent in, so the GS can attribute a received frame with no
 // clock sync and no sequence negotiation. Frame loss IS the measurement
 // for Power/Verify, so this format must survive operating points where
-// nothing else on the link does; Capacity frames instead carry a body
-// sized to the production A-MPDU payload, to measure throughput rather
-// than per-cell delivery.
+// nothing else on the link does; Capacity and Floor frames instead carry a
+// body sized to the production A-MPDU payload, to measure throughput rather
+// than per-cell delivery (a Floor frame is measured by the drone's own send
+// rate, cal_floor.h, and the GS only recognises it).
 // idx is SIGNED and RELATIVE to the chip's own efuse TXAGC anchor, not an
 // absolute TXAGC index -- it lives in the chip's 7-bit signed diff-field
 // range, [-64, 63].
@@ -17,7 +18,7 @@
 
 namespace mabur::cal {
 
-enum class Kind : uint8_t { Power = 1, Verify = 2, Capacity = 3 };
+enum class Kind : uint8_t { Power = 1, Verify = 2, Capacity = 3, Floor = 4 };
 
 constexpr uint8_t kFlagLdpc = 1;
 constexpr uint8_t kFlagStbc = 2;
@@ -38,7 +39,7 @@ struct CalFrameInfo {
 
 // Payload: magic | kind | rate | idx | bw | flags | seq_hi | seq lo16 LE |
 // fill, sized to `len` (64 for power/verify, a production body size for
-// capacity). Fill is (0x5A ^ idx) so a payload corruption that survives
+// capacity and floor). Fill is (0x5A ^ idx) so a payload corruption that survives
 // the FCS is caught by parse rather than mis-attributed to a cell. `len`
 // must be at least kCalHeaderLen.
 inline std::vector<uint8_t> build_cal_payload(Kind kind, uint8_t rate,
@@ -84,7 +85,7 @@ inline bool parse_cal_payload(const uint8_t* p, size_t len, CalFrameInfo* out) {
   const int8_t idx = static_cast<int8_t>(p[6]);
   const uint8_t bw = p[7];
   const uint8_t flags = p[8];
-  if (kind_byte < 1 || kind_byte > 3) return false;
+  if (kind_byte < 1 || kind_byte > 4) return false;
   if (rate > 7) return false;
   if (idx < -64 || idx > 63) return false;
   if (bw != 20 && bw != 40) return false;
