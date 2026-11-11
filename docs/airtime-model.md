@@ -402,19 +402,24 @@ the cost is zero.
   commanded dwell. A point the drone's own TX path limited (its sender
   rarely blocked on the device) is flagged `tx_bound` and keeps the
   existing value. A new table takes effect at the next `maburd` start.
-  The bundle's tables are the reference unit's bench numbers:
-  `docs/findings/2026-09-17-bandwidth-sweep.md` measured 0.87 / 0.78 /
-  0.71 / 0.76 / 0.76 / 0.76 / 0.78 / 0.76 of nominal at mcs0-7 with agg6
-  and 0.93 / 0.88 / 0.84 / 0.80 with singles at mcs0-3 at 20 MHz (linkbench,
-  prod geometry, three channels within 0.5 %), giving 20 MHz `[0.93, 0.88,
-  0.84, 0.80, 0.76, 0.76, 0.78, 0.76]` (singles below mcs4, agg6 above)
-  and 40 MHz `[0.77, 0.75, 0.75, 0.75, 0.74, 0.77, 0.76, 0.75]` with agg6.
+  The bundle's tables are the reference unit's bench numbers with single
+  QoS-Data frames and LDPC+STBC, the mode the bundle flies
+  (`docs/findings/2026-11-11-singles-capacity.md`: linkbench, prod
+  geometry, no post-FEC loss): 20 MHz `[0.90, 0.87, 0.84, 0.81, 0.77, 0.73,
+  0.71, 0.68]` and 40 MHz `[0.87, 0.81, 0.76, 0.72, 0.65, 0.58, 0.57,
+  0.54]`. A single frame costs 70-90 µs beyond its payload time at mcs4-7
+  (preamble and channel access; 100-200 µs at mcs0-3 at 20 MHz), so the
+  delivered share falls as the frame gets shorter on air. With agg6 the
+  same unit delivers 0.85-0.87 at mcs4-7 at 20 MHz and at mcs2-5 at
+  40 MHz. These numbers hold for data frames only: the radio driver sends
+  management frames through another queue, where a single frame costs
+  100-135 µs and nothing aggregates.
 - **The bundle ships aggregation off** (`ampdu.max_num = 0`): every rung
   flies singles. With `max_num` above 0 the mode is per rung and per
   width: `ampdu.min_mcs_20` (bundle 4) / `ampdu.min_mcs_40` (bundle 2) —
   singles below the floor, the configured aggregate at and above
   (`drone/src/ampdu_policy.h`, switched live by
-  `RealActuator::apply_op`). The bundle's table entries for mcs4-7 at
-  20 MHz and the whole 40 MHz table are agg6 numbers; a unit's `maburcal`
-  sweep measures the mode it flies. Do not read a fixed A-MPDU cost into
-  the model.
+  `RealActuator::apply_op`). The bundle's tables are single-frame
+  numbers; a unit's `maburcal` sweep measures the mode it flies, so a unit
+  that turns aggregation on needs a new sweep. Do not read a fixed A-MPDU
+  cost into the model.
