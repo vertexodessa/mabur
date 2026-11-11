@@ -81,7 +81,13 @@ void FrameStream::push_fragment(uint8_t sid, const uint8_t* pkt, size_t len,
 
 uint64_t FrameStream::unwrap_id(uint16_t id, uint8_t flags, bool* rebased) {
   bool discont = (flags & mabur::framewire::kFlagDiscont) != 0;
-  if (!have_id_base_ || (discont && !in_discont_run_)) {
+  int16_t d = static_cast<int16_t>(id - static_cast<uint16_t>(last_id64_));
+  // Ids that step back past zero (the first base is 0x10000, so 0x10000 net
+  // backwards; only forged or corrupt headers do that) re-base like a
+  // producer restart instead of wrapping the id, the gap count and the emit
+  // cursor around 2^64.
+  bool below_zero = d < 0 && static_cast<uint64_t>(-static_cast<int32_t>(d)) > last_id64_;
+  if (!have_id_base_ || (discont && !in_discont_run_) || below_zero) {
     // First frame, or producer restart: re-base far above anything emitted
     // so ordering never waits on pre-discontinuity ids. The drone flags every
     // frame of its ~1 s discont window, so only the first flagged frame of a
@@ -95,7 +101,6 @@ uint64_t FrameStream::unwrap_id(uint16_t id, uint8_t flags, bool* rebased) {
     return last_id64_;
   }
   in_discont_run_ = discont;
-  int16_t d = static_cast<int16_t>(id - static_cast<uint16_t>(last_id64_));
   last_id64_ = static_cast<uint64_t>(static_cast<int64_t>(last_id64_) + d);
   return last_id64_;
 }
@@ -115,13 +120,17 @@ void FrameStream::try_emit(uint64_t now_ms) {
         ++it;
       }
     }
-    // Head-of-line: known-header slot with the lowest id64.
+    // Head-of-line: known-header slot with the lowest id64. Of two slots
+    // with one id (a repeated frame id on another fseq or layer: forged, or
+    // a corrupt header the block CRC let through) the one already begun
+    // stays the head, so a second frame never begins inside an open one;
+    // the other is late once the head finishes.
     Slot* head = nullptr;
     uint64_t max_known = 0;
     for (auto& [k, s] : slots_) {
       if (!s.have_hdr) continue;
       if (s.id64 > max_known) max_known = s.id64;
-      if (!head || s.id64 < head->id64) head = &s;
+      if (!head || s.id64 < head->id64 || (s.id64 == head->id64 && s.began)) head = &s;
     }
     if (!head) return;
     if (have_next_emit_ && head->id64 > next_emit_id64_) {
