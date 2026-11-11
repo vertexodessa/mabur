@@ -1465,6 +1465,7 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
     cal_session.set_peer(
         mav_linked, mav_linked && (vrx.peer_caps() & mabur::rc::CAP_CALIBRATE),
         vrx.session_ctx());
+    cal_session.set_peer_wide(mav_linked && (vrx.peer_caps() & mabur::rc::CAP_CAL_WIDE));
     const uint8_t cal_width =
         maburgs::cal_effective_width(chan.width_mhz(), mav_linked, peer_agreed_width);
     if (cal_width != cal_defaults_width) {

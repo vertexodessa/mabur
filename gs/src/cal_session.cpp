@@ -33,13 +33,21 @@ const char* ack_word(cal::AckResult r) {
     case cal::AckResult::AnchorUnreadable: return "anchor_unreadable";
     case cal::AckResult::Busy: return "busy";
     case cal::AckResult::Unsupported: return "unsupported";
+    case cal::AckResult::NoPair: return "no_pair";
   }
   return "unknown";
 }
 
-// Power before capacity within a width, so a capacity sweep flies at the
-// power its own width's walls were just parked at.
-int kind_order(cal::Kind k) { return k == cal::Kind::Power ? 0 : 1; }
+// Within a width: the floor first, so every 40 MHz sweep after it flies at
+// the floor it found; power before capacity, so a capacity sweep flies at
+// the power its own width's walls were just parked at.
+int kind_order(cal::Kind k) {
+  switch (k) {
+    case cal::Kind::Floor: return 0;
+    case cal::Kind::Power: return 1;
+    default: return 2;
+  }
+}
 
 }  // namespace
 
@@ -64,12 +72,32 @@ bool CalSession::start(uint32_t nonce, std::vector<cal::SweepSpec> sweeps, uint6
     return false;
   }
   for (const auto& s : sweeps) {
-    if (s.kind != cal::Kind::Power && s.kind != cal::Kind::Capacity) {
-      if (err) *err = "refused: a sweep is power or capacity";
+    if (s.kind != cal::Kind::Power && s.kind != cal::Kind::Capacity &&
+        s.kind != cal::Kind::Floor) {
+      if (err) *err = "refused: a sweep is power, capacity or floor";
       return false;
     }
     if (s.bw != 20 && s.bw != 40) {
       if (err) *err = "refused: a sweep's width is 20 or 40";
+      return false;
+    }
+    if (s.kind == cal::Kind::Floor && s.bw != 40) {
+      if (err) *err = "refused: the floor sweep is 40 MHz";
+      return false;
+    }
+  }
+  FloorResult floor;
+  // A drone without CAP_CAL_WIDE would read kind 4 as a power sweep (its
+  // decoder does not check the kind): never sent, and the rest of the run
+  // goes on without it.
+  if (!peer_wide_) {
+    const auto n0 = sweeps.size();
+    sweeps.erase(std::remove_if(sweeps.begin(), sweeps.end(),
+                                [](const cal::SweepSpec& s) { return s.kind == cal::Kind::Floor; }),
+                 sweeps.end());
+    if (sweeps.size() != n0) floor.note = "peer does not support the floor sweep";
+    if (sweeps.empty()) {
+      if (err) *err = "refused: peer does not support the floor sweep";
       return false;
     }
   }
@@ -93,6 +121,7 @@ bool CalSession::start(uint32_t nonce, std::vector<cal::SweepSpec> sweeps, uint6
   ack_flags_ = 0;
   done_.reset();
   width_ = {};
+  floor_ = floor;
   reloc_ordered_ = false;
   // pending_abort_ is deliberately kept: copies of the previous run's
   // Abort that have not gone out yet still must.
@@ -117,6 +146,13 @@ void CalSession::on_mav(const cal::CalMsg& m, uint64_t now_ms) {
   step(now_ms);
   if (const auto* a = std::get_if<cal::SweepAck>(&m)) {
     if (state_ != State::AwaitAck || a->nonce != nonce_ || a->seq != cmd_.seq) return;
+    if (a->result == cal::AckResult::Unsupported && cmd_.kind == cal::Kind::Floor) {
+      // A drone with no runtime floor (not a Jaguar3 radio): the run goes
+      // on without the floor, at the one the drone's config already has.
+      floor_.note = "peer does not support the floor sweep";
+      next_sweep(now_ms);
+      return;
+    }
     if (a->result != cal::AckResult::Accepted) {
       fail(std::string("sweep refused by the drone: ") + ack_word(a->result));
       return;
@@ -202,8 +238,12 @@ void CalSession::on_cal_frame(int card, const cal::CalFrameInfo& f, int rssi_dbm
     }
     if (cmd_.kind == cal::Kind::Power)
       tally_power(card, f, rssi_dbm, crc_ok);
-    else
+    else if (cmd_.kind == cal::Kind::Capacity)
       tally_capacity(card, f, rssi_dbm, crc_ok, air_bytes, rx_ms);
+    else if (f.idx >= 0)
+      // The floor is judged by the drone's own send rate, not by what the
+      // GS hears; a frame only shows which candidate is on the air.
+      cell_i_ = static_cast<uint32_t>(f.idx) + 1;
   } else if (state_ == State::Verify) {
     if (f.kind != cal::Kind::Verify || f.bw != cmd_.bw || f.flags != ack_flags_) {
       ++stamp_mismatch_;
@@ -266,8 +306,9 @@ CalSnapshot CalSession::snapshot() const {
       s.cell_n = static_cast<uint32_t>(verify_cells_.size());
     } else {
       const uint32_t rates = static_cast<uint32_t>(std::bitset<8>(cmd_.mcs_mask).count());
-      s.cell_n = cmd_.kind == cal::Kind::Capacity
-                     ? rates
+      s.cell_n = cmd_.kind == cal::Kind::Capacity ? rates
+                 : cmd_.kind == cal::Kind::Floor
+                     ? static_cast<uint32_t>(floor_.cands.size())
                      : rates * static_cast<uint32_t>(cells_per_row());
     }
   }
@@ -277,6 +318,7 @@ CalSnapshot CalSession::snapshot() const {
   s.flags = ack_flags_;
   s.stamp_mismatch = stamp_mismatch_;
   s.width = width_;
+  s.floor = floor_;
   s.fail_reason = fail_reason_;
   return s;
 }
@@ -375,8 +417,10 @@ void CalSession::begin_sweep(size_t i, uint64_t now_ms) {
   sweep_i_ = i;
   const cal::SweepSpec& sp = sweeps_[i];
   const uint8_t seq = static_cast<uint8_t>(i);
-  cmd_ = sp.kind == cal::Kind::Power ? make_power_sweep(nonce_, seq, sp.bw)
-                                     : make_capacity_sweep(nonce_, seq, sp.bw);
+  cmd_ = sp.kind == cal::Kind::Power   ? make_power_sweep(nonce_, seq, sp.bw)
+         : sp.kind == cal::Kind::Floor ? cal::make_floor_sweep(nonce_, seq)
+                                       : make_capacity_sweep(nonce_, seq, sp.bw);
+  if (sp.kind == cal::Kind::Floor) floor_.cands = cal::floor_candidates(cmd_.idx_lo, cmd_.idx_hi);
   // Frozen when the run first commands the drone: the drone latches the
   // pair its first SweepCmd arrived under and checks every later cal
   // message of the run against it, while the GS keeps beaconing between
@@ -418,7 +462,8 @@ void CalSession::on_accepted(uint8_t flags, uint16_t start_in_ms, uint64_t now_m
   }
   if (log_)
     log_->sweep(cmd_.seq, cmd_.kind, cmd_.bw,
-                cmd_.kind == cal::Kind::Capacity ? cmd_.dwell_ms : cmd_.frames_per_cell);
+                cmd_.kind == cal::Kind::Power ? cmd_.frames_per_cell : cmd_.dwell_ms);
+  if (cmd_.kind == cal::Kind::Floor) floor_.ran = true;
   sweep_end_ms_ = now_ms + start_in_ms + sweep_duration_ms(cmd_);
   window_end_ms_ = sweep_end_ms_ + cfg_.phase_slack_ms;
   state_ = State::Sweep;
@@ -488,8 +533,9 @@ void CalSession::tally_verify(int card, const cal::CalFrameInfo& f, bool crc_ok)
 
 void CalSession::finish_sweep(uint64_t now_ms) {
   state_ = State::Analyze;
-  const bool apply =
-      cmd_.kind == cal::Kind::Power ? analyze_power() : analyze_capacity_sweep();
+  const bool apply = cmd_.kind == cal::Kind::Power   ? analyze_power()
+                     : cmd_.kind == cal::Kind::Floor ? analyze_floor()
+                                                     : analyze_capacity_sweep();
   if (apply)
     begin_apply(now_ms);
   else
@@ -600,6 +646,33 @@ bool CalSession::analyze_capacity_sweep() {
   return any;
 }
 
+bool CalSession::analyze_floor() {
+  apply_ = cal::ApplyCmd{};
+  apply_.nonce = nonce_;
+  apply_.seq = cmd_.seq;
+  apply_.bw = cmd_.bw;
+  apply_wrote_walls_ = false;
+  if (!done_) {
+    // Which value passed is only in the drone's report.
+    floor_.note = "the floor sweep's result was lost";
+    if (log_) log_->floor(cal::FloorReport{}, floor_.cands, 0);
+    return false;
+  }
+  floor_.have = true;
+  floor_.rep = cal::unpack_floor_done(*done_);
+  if (floor_.rep.ref_fps == 0)
+    floor_.note = "the reference point sent nothing";
+  else if (floor_.rep.floor == 0)
+    floor_.note = "no floor passed";
+  else
+    floor_.written = cal::floor_with_margin(floor_.rep.floor);
+  if (log_) log_->floor(floor_.rep, floor_.cands, floor_.written);
+  if (floor_.written == 0) return false;
+  apply_.has_floor = true;
+  apply_.floor = floor_.written;
+  return true;
+}
+
 void CalSession::begin_apply(uint64_t now_ms) {
   phase_start_ms_ = now_ms;
   sent_once_ = false;
@@ -607,8 +680,18 @@ void CalSession::begin_apply(uint64_t now_ms) {
 }
 
 void CalSession::on_applied(const cal::Applied& a, uint64_t now_ms) {
-  WidthResult& w = width_result();
   if (log_) log_->applied(a.bw, a.ok, a.reason);
+  if (cmd_.kind == cal::Kind::Floor) {
+    floor_.applied = a.ok;
+    floor_.note = a.reason;
+    if (!a.ok) {
+      fail("floor apply refused by the drone: " + a.reason);
+      return;
+    }
+    next_sweep(now_ms);
+    return;
+  }
+  WidthResult& w = width_result();
   w.applied = a.ok;
   w.apply_reason = a.reason;
   if (!a.ok) {

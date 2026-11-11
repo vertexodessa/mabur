@@ -5,6 +5,9 @@
 #include <string>
 
 #include "log_writer.h"
+#include <vector>
+
+#include "mabur/cal_floor.h"
 #include "mabur/cal_wire.h"
 
 namespace maburgs {
@@ -31,9 +34,9 @@ struct CapResult;
 // Record format is LOCKED (gs/bundle/maburcal's reader and
 // tests/test_cal_log.cpp depend on the exact byte layout):
 //
-//   callog 5                                                     # once, first line
+//   callog 6                                                     # once, first line
 //   R <nonce> <margin_db> <ch> <pick> <ldpc 0|1>       # once per calibration run
-//   S <seq> <power|capacity> <bw> <frames|dwell_ms>    # once per sweep; scopes
+//   S <seq> <power|capacity|floor> <bw> <frames|dwell_ms>  # once per sweep; scopes
 //                                                       # every C/W/P/V row below
 //                                                       # it to that sweep's width,
 //                                                       # until the next S row
@@ -51,6 +54,10 @@ struct CapResult;
 //                                                # too short to trust, eff over
 //                                                # the commanded dwell instead)
 //   V <rate> <idx> <pct>                         # one row per verify cell
+//   F <floor> <min_fps>                          # one row per floor candidate
+//                                                # tried: its worst second
+//   L <ref_fps> <found> <confirm_pct> <written>  # one row per floor sweep;
+//                                                # found/written 0 = none
 //   A <bw> <0|1> <reason to end of line>          # one row per apply attempt
 //
 // `pick` is one of auto|pinned|onecard|stayed -- the channel selection
@@ -153,7 +160,7 @@ class CalLog {
 
   bool ok() const { return s_ != LogWriter::kBadStream; }
 
-  // The format-marker line, `callog 5`. Call at most once per FILE (i.e.
+  // The format-marker line, `callog 6`. Call at most once per FILE (i.e.
   // never on a rejoin of an already-headed session directory) -- it
   // carries no per-run data, so unlike ctl.log's single combined header
   // there is no reason for a second calibration run in the same session to
@@ -169,7 +176,8 @@ class CalLog {
   // `pick` is one of auto|pinned|onecard|stayed, written verbatim.
   void run(uint32_t nonce, double margin_db, uint8_t ch, const char* pick,
            bool ldpc);
-  // One sweep's own parameters: `S <seq> <power|capacity> <bw> <param>`.
+  // One sweep's own parameters: `S <seq> <power|capacity|floor> <bw> <param>`
+  // (a floor sweep's param is its per-candidate dwell_ms).
   // Scopes every C/W/P/V row that follows, up to the next sweep() call, to
   // this sweep's width -- a verify pass (cal::Kind::Verify) shares the
   // `power` word with an ordinary power sweep, since both are frame-count
@@ -186,6 +194,11 @@ class CalLog {
   // the union" convention the wall pass uses.
   void cap(uint8_t rate, const CapCell& c, const CapResult& r);
   void verify(uint8_t rate, int idx, int pct);
+  // One floor sweep's result: `F <floor> <min_fps>` per candidate tried
+  // (its worst second, frames/s), then `L <ref_fps> <found> <confirm_pct>
+  // <write>` -- found 0 when no value passed, write 0 when nothing is
+  // written.
+  void floor(const mabur::cal::FloorReport& r, const std::vector<uint8_t>& cands, uint8_t write);
   // One apply attempt's outcome: `A <bw> <0|1> <reason to end of line>`.
   // `reason` keeps its spaces -- this is the last field on the line, so
   // nothing after it needs delimiting.

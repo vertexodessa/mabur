@@ -285,6 +285,7 @@ std::string patch_toml(const std::string& text, const CalWrite& w, PatchStatus* 
   const int idx_eff_bw = find_key_line(lines, eff_key);
   const int idx_eff_other = find_key_line(lines, eff_other_key);
   const int idx_shed_ms = find_key_line(lines, "shed_ms");
+  const int idx_floor = find_key_line(lines, "wide_tx_igi_floor");
   // Which line owns rate_walls_rel_20 specifically, independent of which
   // width this call is writing -- legacy_wall_rel's patch condition reads
   // this, not idx_rate_bw/idx_rate_other.
@@ -407,6 +408,18 @@ std::string patch_toml(const std::string& text, const CalWrite& w, PatchStatus* 
     }
   }
 
+  if (w.has_floor) {
+    if (idx_floor >= 0) {
+      if (rewrite_int(lines, idx_floor, "wide_tx_igi_floor", w.floor))
+        if (status) status->floor = true;
+    } else if (idx_power_mode >= 0) {
+      // Both are [radio] keys; power_mode is the one line every config
+      // patch_toml calibrates already has.
+      pending.push_back({idx_power_mode, "wide_tx_igi_floor = " + std::to_string(w.floor)});
+      if (status) status->floor = true;
+    }
+  }
+
   // Apply insertions anchor-ascending, so each insertion's own shift only
   // ever pushes an anchor that comes AFTER it in the file -- never one
   // already used. stable_sort keeps two insertions sharing an anchor (the
@@ -460,6 +473,13 @@ bool walls_in_range(const CalWrite& w, double margin_db, std::string* why) {
     if (!check_wall(w.walls[i], rate_field + "[" + std::to_string(i) + "]"))
       return false;
   if (!check_wall(w.legacy_wall, "radio.legacy_wall_rel")) return false;
+
+  // 0 is the loader's "no floor", never a measurement.
+  if (w.has_floor && (w.floor < 1 || w.floor > 0x7f)) {
+    if (why)
+      *why = "radio.wide_tx_igi_floor: " + std::to_string(w.floor) + " is outside [1,127]";
+    return false;
+  }
 
   // eff has no hardware field to mirror: [0.05, 1.0] is this file's own
   // sanity bound on a measured capacity fraction (the loader itself only
@@ -516,6 +536,12 @@ bool patch_covered_required_keys(const PatchStatus& s, const CalWrite& w,
     if (why)
       *why = "air_clock.efficiency_" + std::to_string(w.bw) +
              ": line not found in config -- unexpected file structure, nothing written";
+    return false;
+  }
+  if (w.has_floor && !s.floor) {
+    if (why)
+      *why = "radio.wide_tx_igi_floor: line not found in config -- unexpected file structure, "
+             "nothing written";
     return false;
   }
   return true;

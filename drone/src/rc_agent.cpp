@@ -1078,7 +1078,8 @@ rc::DiscAck RcAgent::make_disc_ack(uint32_t vrx_nonce, uint32_t vtx_nonce, uint8
   // CAP_MAVLINK: this build answers T_MAV (main.cpp's MAV thread).
   // Display-only, like CAP_TELEMETRY: the GS logs a peer without it once
   // per session and gates nothing on it.
-  ack.chip_caps = rc::CAP_FRAME_WIRE | rc::CAP_TELEMETRY | rc::CAP_CALIBRATE | rc::CAP_MAVLINK;
+  ack.chip_caps = rc::CAP_FRAME_WIRE | rc::CAP_TELEMETRY | rc::CAP_CALIBRATE | rc::CAP_MAVLINK |
+                  rc::CAP_CAL_WIDE;
   // agreed is member_(op_channel) ? the DISC's proposed op_channel : the
   // current channel -- computed by the caller, which also stores it in the
   // pending pair whose promotion drives the actual retune, so the ack and the

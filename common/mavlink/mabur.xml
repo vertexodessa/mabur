@@ -19,6 +19,9 @@
       <entry value="3" name="MABUR_CAL_KIND_CAPACITY">
         <description>Link-capacity dwell sweep.</description>
       </entry>
+      <entry value="4" name="MABUR_CAL_KIND_FLOOR">
+        <description>Wide-TX receive-gain floor sweep (40 MHz only).</description>
+      </entry>
     </enum>
     <enum name="MABUR_CAL_ACK_RESULT">
       <description>Why MABUR_CAL_ACK accepted or refused a MABUR_CAL_SWEEP.</description>
@@ -33,6 +36,9 @@
       </entry>
       <entry value="3" name="MABUR_CAL_ACK_RESULT_UNSUPPORTED">
         <description>The requested sweep is not supported by this drone build.</description>
+      </entry>
+      <entry value="4" name="MABUR_CAL_ACK_RESULT_NO_PAIR">
+        <description>The sweep is 40 MHz and the drone's channel has no 40 MHz pair.</description>
       </entry>
     </enum>
   </enums>
@@ -71,9 +77,9 @@
       <field type="uint32_t" name="nonce">Session nonce for this apply.</field>
       <field type="uint8_t" name="seq">Seq of the sweep that produced this table.</field>
       <field type="uint8_t" name="bw">Channel bandwidth (MHz) the table applies to.</field>
-      <field type="uint8_t" name="has">Bitmask of which wall/efficiency slots are present.</field>
+      <field type="uint8_t" name="has">Bitmask of what is present: 1 walls, 2 efficiency, 4 the receive-gain floor (carried in legacy).</field>
       <field type="int8_t[8]" name="walls">Rel power-index wall per rung.</field>
-      <field type="int8_t" name="legacy">Wall for legacy/control frames (radio.legacy_wall_rel), from the 20 MHz mcs0 wall, or the 40 MHz one when the run has no 20 MHz power sweep; -128 = leave.</field>
+      <field type="int8_t" name="legacy">Wall for legacy/control frames (radio.legacy_wall_rel), from the 20 MHz mcs0 wall, or the 40 MHz one when the run has no 20 MHz power sweep; -128 = leave. With has bit 4: radio.wide_tx_igi_floor, 0..127.</field>
       <field type="uint16_t[8]" name="eff">air_clock efficiency per rung.</field>
     </message>
     <message id="60004" name="MABUR_CAL_APPLIED">

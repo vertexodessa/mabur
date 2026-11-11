@@ -13,7 +13,7 @@
 
 namespace maburgs {
 namespace {
-constexpr char kCalLogMarker[] = "callog 5";
+constexpr char kCalLogMarker[] = "callog 6";
 }  // namespace
 
 bool cal_log_header_due(const std::string& dir) {
@@ -73,8 +73,9 @@ void CalLog::sweep(uint8_t seq, mabur::cal::Kind kind, uint8_t bw,
   // Verify shares the `power` word with an ordinary power sweep: both are
   // frame-count measurements, and only Capacity's dwell_ms param means
   // something different enough to need its own word.
-  const char* k =
-      kind == mabur::cal::Kind::Capacity ? "capacity" : "power";
+  const char* k = kind == mabur::cal::Kind::Capacity ? "capacity"
+                  : kind == mabur::cal::Kind::Floor  ? "floor"
+                                                     : "power";
   char b[64];
   const int n = std::snprintf(b, sizeof(b), "S %d %s %d %u", seq, k, bw, param);
   if (n > 0)
@@ -140,6 +141,19 @@ void CalLog::applied(uint8_t bw, bool ok, const std::string& reason) {
   std::string line = "A " + std::to_string(bw) + " " + (ok ? "1" : "0") +
                       " " + clean;
   w_.line(s_, line.c_str(), line.size());
+}
+
+void CalLog::floor(const mabur::cal::FloorReport& r, const std::vector<uint8_t>& cands,
+                   uint8_t write) {
+  if (s_ == LogWriter::kBadStream) return;
+  char b[96];
+  for (size_t i = 0; i < r.tried && i < cands.size(); ++i) {
+    const int n = std::snprintf(b, sizeof(b), "F %d %u", cands[i], r.min_fps[i]);
+    if (n > 0) w_.line(s_, b, std::min(static_cast<size_t>(n), sizeof(b) - 1));
+  }
+  const int n = std::snprintf(b, sizeof(b), "L %u %d %d %d", r.ref_fps, r.floor,
+                              r.confirm_pct, write);
+  if (n > 0) w_.line(s_, b, std::min(static_cast<size_t>(n), sizeof(b) - 1));
 }
 
 void CalLog::flush() {

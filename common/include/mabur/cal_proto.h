@@ -14,8 +14,8 @@
 
 namespace mabur::cal {
 
-// One cell the drone is asked to sweep: a kind (Power or Capacity) at a
-// bandwidth (20 or 40).
+// One cell the drone is asked to sweep: a kind (Power, Capacity, or Floor,
+// which is 40 MHz only) at a bandwidth (20 or 40).
 struct SweepSpec {
   Kind kind;
   uint8_t bw;
@@ -23,7 +23,9 @@ struct SweepSpec {
 
 // Ground -> drone: run a sweep. idx_lo/idx_hi bound the rel power-index
 // range (Power/Verify); mcs_mask selects which rates a Capacity sweep
-// probes.
+// probes. A Floor sweep reads idx_lo/idx_hi as its candidate floors,
+// dwell_ms as the dwell per candidate and mcs_mask as its one rate
+// (cal_floor.h make_floor_sweep).
 struct SweepCmd {
   uint32_t nonce = 0;
   uint8_t seq = 0;
@@ -38,7 +40,16 @@ struct SweepCmd {
   uint8_t mcs_mask = 0xFF;
 };
 
-enum class AckResult : uint8_t { Accepted = 0, AnchorUnreadable = 1, Busy = 2, Unsupported = 3 };
+// Unsupported: a kind this drone does not run (a Floor sweep on a radio
+// without a runtime receive-gain floor, or a kind newer than the build).
+// NoPair: a 40 MHz sweep on a channel with no HT40 pair.
+enum class AckResult : uint8_t {
+  Accepted = 0,
+  AnchorUnreadable = 1,
+  Busy = 2,
+  Unsupported = 3,
+  NoPair = 4,
+};
 
 // Drone -> ground: accept/refuse a SweepCmd, and how soon it starts.
 struct SweepAck {
@@ -49,7 +60,8 @@ struct SweepAck {
   uint8_t flags = 0;
 };
 
-// Drone -> ground: a finished sweep's per-cell results, up to 8 cells.
+// Drone -> ground: a finished sweep's per-cell results, up to 8 cells. A
+// Floor sweep's result rides the same fields (cal_floor.h pack_floor_done).
 struct SweepDone {
   uint32_t nonce = 0;
   uint8_t seq = 0;
@@ -73,6 +85,10 @@ struct ApplyCmd {
                               kWallLeave, kWallLeave, kWallLeave, kWallLeave};
   int8_t legacy = kWallLeave;
   std::array<uint16_t, 8> eff_x1000{};
+  // radio.wide_tx_igi_floor, from a Floor sweep (bw 40). Never in the same
+  // apply as walls, so on the wire it rides `legacy` (has bit 2).
+  bool has_floor = false;
+  uint8_t floor = 0;
 };
 
 // Drone -> ground: whether it adopted an ApplyCmd; nonce, seq and bw echo
