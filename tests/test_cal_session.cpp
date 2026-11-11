@@ -1190,4 +1190,177 @@ TEST(null_log_sink_is_inert) {
   CHECK(s.state() == State::Done);
 }
 
+
+// ---- floor sweep ----------------------------------------------------------
+
+namespace {
+
+cal::SweepDone floor_done(uint32_t nonce, uint8_t seq, uint8_t found, uint8_t tried) {
+  cal::FloorReport r;
+  r.ref_fps = 2484;
+  r.floor = found;
+  r.tried = tried;
+  r.confirm_pct = found ? 100 : 0;
+  for (uint8_t i = 0; i < tried; ++i) r.min_fps[i] = (found && i + 1 == tried) ? 2484 : 0;
+  return cal::pack_floor_done(nonce, seq, r);
+}
+
+}  // namespace
+
+TEST(floor_sorts_first_within_40_and_is_commanded_as_built) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(1,
+                  {{Kind::Capacity, 40}, {Kind::Power, 40}, {Kind::Floor, 40},
+                   {Kind::Power, 20}, {Kind::Floor, 40}},
+                  0, &err));
+  const auto& v = s.sweeps();
+  REQUIRE(v.size() == 4);
+  CHECK(v[0].kind == Kind::Power && v[0].bw == 20);
+  CHECK(v[1].kind == Kind::Floor && v[1].bw == 40);
+  CHECK(v[2].kind == Kind::Power && v[2].bw == 40);
+  CHECK(v[3].kind == Kind::Capacity && v[3].bw == 40);
+
+  CalSession t(CalSessionCfg{});
+  t.set_peer(true, true);
+  t.set_peer_wide(true);
+  REQUIRE(t.start(2, {{Kind::Floor, 40}}, 0, &err));
+  const auto cmd = as<cal::SweepCmd>(t.due_mav(0));
+  REQUIRE(cmd.has_value());
+  const auto want = cal::make_floor_sweep(2, 0);
+  CHECK(cmd->kind == Kind::Floor && cmd->bw == 40);
+  CHECK(cmd->idx_lo == want.idx_lo && cmd->idx_hi == want.idx_hi);
+  CHECK(cmd->dwell_ms == want.dwell_ms && cmd->settle_ms == want.settle_ms);
+  CHECK(cmd->mcs_mask == want.mcs_mask);
+  CHECK(t.snapshot().cell_n == 12);
+
+  CalSession u(CalSessionCfg{});
+  u.set_peer(true, true);
+  u.set_peer_wide(true);
+  CHECK(!u.start(3, {{Kind::Floor, 20}}, 0, &err));
+  CHECK(err.find("40 MHz") != std::string::npos);
+}
+
+TEST(a_found_floor_is_written_with_its_margin_and_the_run_goes_on) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(5, {{Kind::Floor, 40}, {Kind::Power, 40}}, 0, &err));
+  REQUIRE(as<cal::SweepCmd>(s.due_mav(0)).has_value());
+  ack(s, 5, 0, 10);
+  CHECK(s.radio_silent(20));
+  // Frames show which candidate is on the air; nothing is tallied.
+  s.on_cal_frame(0, stamp(Kind::Floor, cal::kFloorMcs, 2, 40, kFlags), -60, true, 1400, 20);
+  CHECK(s.snapshot().cell_i == 3);
+  s.on_mav(floor_done(5, 0, 0x24, 3), 30000);
+  const auto a = as<cal::ApplyCmd>(s.due_mav(30010));
+  REQUIRE(a.has_value());
+  CHECK(a->has_floor);
+  CHECK(a->floor == 0x28);  // 0x24 + 4 steps
+  CHECK(!a->has_walls);
+  CHECK(!a->has_eff);
+  CHECK(a->bw == 40);
+  s.on_mav(cal::Applied{5, 0, 40, true, ""}, 30020);
+  const auto snap = s.snapshot();
+  CHECK(snap.floor.ran);
+  CHECK(snap.floor.have);
+  CHECK(snap.floor.rep.floor == 0x24);
+  CHECK(snap.floor.written == 0x28);
+  CHECK(snap.floor.applied);
+  CHECK(snap.state == State::AwaitAck);
+  CHECK(snap.sweep_i == 1);
+}
+
+TEST(no_passing_floor_writes_nothing_and_says_so) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(6, {{Kind::Floor, 40}}, 0, &err));
+  REQUIRE(as<cal::SweepCmd>(s.due_mav(0)).has_value());
+  ack(s, 6, 0, 10);
+  s.on_mav(floor_done(6, 0, 0, 12), 60000);
+  const auto snap = s.snapshot();
+  CHECK(snap.state == State::Done);
+  CHECK(snap.floor.have);
+  CHECK(snap.floor.written == 0);
+  CHECK(snap.floor.note == "no floor passed");
+}
+
+TEST(a_lost_floor_report_writes_nothing) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(7, {{Kind::Floor, 40}}, 0, &err));
+  REQUIRE(as<cal::SweepCmd>(s.due_mav(0)).has_value());
+  ack(s, 7, 0, 10);
+  const uint32_t window =
+      cal::floor_sweep_max_ms(cal::make_floor_sweep(7, 0)) + CalSessionCfg{}.phase_slack_ms;
+  CHECK(s.radio_silent(10 + window - 1));
+  s.due_mav(10 + window + 1);
+  const auto snap = s.snapshot();
+  CHECK(snap.state == State::Done);
+  CHECK(!snap.floor.have);
+  CHECK(snap.floor.written == 0);
+  CHECK(snap.floor.note == "the floor sweep's result was lost");
+}
+
+TEST(a_peer_without_the_floor_sweep_runs_the_rest) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);  // no CAP_CAL_WIDE
+  std::string err;
+  REQUIRE(s.start(8, {{Kind::Power, 20}, {Kind::Floor, 40}}, 0, &err));
+  REQUIRE(s.sweeps().size() == 1);
+  CHECK(s.sweeps()[0].kind == Kind::Power);
+  CHECK(s.snapshot().floor.note == "peer does not support the floor sweep");
+  CalSession t(CalSessionCfg{});
+  t.set_peer(true, true);
+  CHECK(!t.start(9, {{Kind::Floor, 40}}, 0, &err));
+  CHECK(err == "refused: peer does not support the floor sweep");
+}
+
+TEST(an_unsupported_floor_ack_moves_on_to_the_next_sweep) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(10, {{Kind::Floor, 40}, {Kind::Power, 40}}, 0, &err));
+  REQUIRE(as<cal::SweepCmd>(s.due_mav(0)).has_value());
+  ack(s, 10, 0, 10, kFlags, cal::AckResult::Unsupported);
+  const auto snap = s.snapshot();
+  CHECK(snap.state == State::AwaitAck);
+  CHECK(snap.sweep_i == 1);
+  CHECK(snap.floor.note == "peer does not support the floor sweep");
+  const auto cmd = as<cal::SweepCmd>(s.due_mav(20));
+  REQUIRE(cmd.has_value());
+  CHECK(cmd->kind == Kind::Power && cmd->bw == 40);
+}
+
+TEST(floor_rows_land_in_the_cal_log) {
+  const auto dir = fresh_dir("cal_session_floor_log");
+  CalLog log(dir);
+  log.header();
+  CalSession s(CalSessionCfg{}, &log);
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(11, {{Kind::Floor, 40}}, 0, &err));
+  REQUIRE(as<cal::SweepCmd>(s.due_mav(0)).has_value());
+  ack(s, 11, 0, 10);
+  s.on_mav(floor_done(11, 0, 0x22, 2), 30000);
+  REQUIRE(as<cal::ApplyCmd>(s.due_mav(30010)).has_value());
+  s.on_mav(cal::Applied{11, 0, 40, true, ""}, 30020);
+  log.flush();
+  const auto ls = cal_log_lines(dir);
+  REQUIRE(ls.size() >= 6);
+  CHECK(ls[2] == "S 0 floor 40 4000");
+  CHECK(ls[3] == "F 32 0");
+  CHECK(ls[4] == "F 34 2484");
+  CHECK(ls[5] == "L 2484 34 100 38");
+}
+
 MTEST_MAIN

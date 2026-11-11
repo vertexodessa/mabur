@@ -20,10 +20,11 @@ namespace maburgs {
 const char* cal_state_name(CalSession::State st);
 
 // "verify" during the verify pass, else the running sweep's own kind:
-// "power" or "capacity".
+// "power", "capacity" or "floor".
 const char* cal_kind_name(const CalSnapshot& snap);
 
-// The operator's token for one sweep: power20, power40, cap20, cap40.
+// The operator's token for one sweep: power20, power40, cap20, cap40, floor
+// (the floor sweep is 40 MHz only).
 std::string cal_sweep_token(const mabur::cal::SweepSpec& spec);
 
 // The dot11 header every calibration frame flies under: the drone's

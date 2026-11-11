@@ -126,7 +126,7 @@ class CalControl {
   //   start [tok...]        begin a session (refuses if not linked / no
   //                         CAP_CALIBRATE / already running). With no
   //                         tokens, runs `defaults`; otherwise each token
-  //                         is power20|power40|cap20|cap40, any order,
+  //                         is power20|power40|cap20|cap40|floor, any order,
   //                         duplicates dropped (the session itself sorts
   //                         and dedups).
   //   status                one-line progress, never mutates
@@ -236,13 +236,15 @@ class CalControl {
   }
 
  private:
-  // power20 | power40 | cap20 | cap40 -> the sweep it names. False (spec
-  // untouched) for anything else.
+  // power20 | power40 | cap20 | cap40 | floor -> the sweep it names (floor
+  // is the 40 MHz receive-gain floor sweep). False (spec untouched) for
+  // anything else.
   static bool parse_token(const std::string& tok, mabur::cal::SweepSpec* spec) {
     if (tok == "power20") { *spec = {mabur::cal::Kind::Power, 20}; return true; }
     if (tok == "power40") { *spec = {mabur::cal::Kind::Power, 40}; return true; }
     if (tok == "cap20") { *spec = {mabur::cal::Kind::Capacity, 20}; return true; }
     if (tok == "cap40") { *spec = {mabur::cal::Kind::Capacity, 40}; return true; }
+    if (tok == "floor") { *spec = {mabur::cal::Kind::Floor, 40}; return true; }
     return false;
   }
 

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <bitset>
 
+#include "mabur/cal_floor.h"
+
 namespace maburgs {
 
 mabur::cal::SweepCmd make_power_sweep(uint32_t nonce, uint8_t seq, uint8_t bw) {
@@ -41,6 +43,7 @@ std::vector<std::pair<uint8_t, int>> verify_cells(const std::array<int, 8>& park
 
 uint32_t sweep_duration_ms(const mabur::cal::SweepCmd& c) {
   constexpr uint32_t kRates = 8;
+  if (c.kind == mabur::cal::Kind::Floor) return mabur::cal::floor_sweep_max_ms(c);
   if (c.kind == mabur::cal::Kind::Capacity) {
     const uint32_t rows = std::bitset<8>(c.mcs_mask).count();
     return rows * (static_cast<uint32_t>(c.settle_ms) + c.dwell_ms);

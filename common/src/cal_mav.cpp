@@ -37,9 +37,11 @@ std::vector<uint8_t> encode(const CalMsg& m, uint8_t sysid, uint8_t compid, uint
           mavlink_msg_mabur_cal_sweep_done_pack_chan(sysid, compid, chan, &msg, v.nonce, v.seq,
                                                      v.offered.data(), v.blocked_pct.data());
         } else if constexpr (std::is_same_v<T, ApplyCmd>) {
-          const uint8_t has = (v.has_walls ? 1u : 0u) | (v.has_eff ? 2u : 0u);
+          const uint8_t has =
+              (v.has_walls ? 1u : 0u) | (v.has_eff ? 2u : 0u) | (v.has_floor ? 4u : 0u);
+          const int8_t legacy = v.has_floor ? static_cast<int8_t>(v.floor) : v.legacy;
           mavlink_msg_mabur_cal_apply_pack_chan(sysid, compid, chan, &msg, v.nonce, v.seq, v.bw, has,
-                                                v.walls.data(), v.legacy, v.eff_x1000.data());
+                                                v.walls.data(), legacy, v.eff_x1000.data());
         } else if constexpr (std::is_same_v<T, Applied>) {
           char reason[50];
           pack_reason(v.reason, reason);
@@ -107,8 +109,12 @@ std::optional<CalMsg> decode(const mavlink_message_t& msg) {
       a.bw = d.bw;
       a.has_walls = (d.has & 1u) != 0;
       a.has_eff = (d.has & 2u) != 0;
+      a.has_floor = (d.has & 4u) != 0;
       std::copy(d.walls, d.walls + 8, a.walls.begin());
-      a.legacy = d.legacy;
+      if (a.has_floor)
+        a.floor = static_cast<uint8_t>(d.legacy);  // 0..0x7f: fits the int8 field
+      else
+        a.legacy = d.legacy;
       std::copy(d.eff, d.eff + 8, a.eff_x1000.begin());
       return CalMsg{a};
     }

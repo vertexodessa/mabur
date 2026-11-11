@@ -39,7 +39,7 @@ std::string fresh_dir(const char* name) {
 
 }  // namespace
 
-TEST(header_is_callog_5) {
+TEST(header_is_callog_6) {
   // The marker is what versions this FILE, independent of any run's data --
   // the schema itself is free to change provided maburcal changes in the
   // same commit.
@@ -47,7 +47,7 @@ TEST(header_is_callog_5) {
   { CalLog l(d); l.header(); }
   const auto ls = lines_of(d);
   REQUIRE(!ls.empty());
-  CHECK(ls[0] == "callog 5");
+  CHECK(ls[0] == "callog 6");
 }
 
 TEST(run_record_carries_channel_pick_and_ldpc) {
@@ -85,7 +85,7 @@ TEST(two_runs_in_one_session_append_two_run_records) {
   int header_count = 0;
   std::vector<std::string> run_lines;
   for (const auto& line : ls) {
-    if (line == "callog 5") ++header_count;
+    if (line == "callog 6") ++header_count;
     if (line.rfind("R ", 0) == 0) run_lines.push_back(line);
   }
   CHECK(header_count == 1);
@@ -248,12 +248,11 @@ TEST(reopening_appends_without_a_second_header) {
   { CalLog l(d); l.verify(1, 87, 99); }
   const auto ls = lines_of(d);
   REQUIRE(ls.size() == 3);
-  CHECK(ls[0] == "callog 5");
+  CHECK(ls[0] == "callog 6");
   CHECK(ls[1].rfind("V ", 0) == 0);
   CHECK(ls[2].rfind("V ", 0) == 0);
 }
 
-MTEST_MAIN
 
 TEST(header_is_due_only_until_the_file_itself_exists) {
   // cal_log_header_due is the single source of truth for "is this
@@ -305,7 +304,7 @@ TEST(a_current_format_cal_log_is_left_alone) {
   CHECK(!cal_log_prepare(d));
   const auto ls = lines_of(d);
   REQUIRE(ls.size() == 2);
-  CHECK(ls[0] == "callog 5");
+  CHECK(ls[0] == "callog 6");
 }
 
 TEST(prepare_on_a_directory_with_no_cal_log_reports_the_header_is_due) {
@@ -322,3 +321,30 @@ TEST(a_callog_4_file_is_retired_too) {
   std::ifstream retired(d + "/cal.log.callog4");
   REQUIRE(retired.good());
 }
+
+TEST(floor_rows_list_each_candidate_tried_then_the_result) {
+  const auto d = fresh_dir("callog_floor");
+  mabur::cal::FloorReport r;
+  r.ref_fps = 2484;
+  r.floor = 0x24;
+  r.tried = 3;
+  r.confirm_pct = 100;
+  r.min_fps[0] = 0;
+  r.min_fps[1] = 2484;
+  r.min_fps[2] = 2470;
+  {
+    CalLog l(d);
+    l.header();
+    l.sweep(2, mabur::cal::Kind::Floor, 40, 4000);
+    l.floor(r, mabur::cal::floor_candidates(mabur::cal::kFloorLo, mabur::cal::kFloorHi), 0x28);
+  }
+  const auto ls = lines_of(d);
+  REQUIRE(ls.size() == 6);
+  CHECK(ls[1] == "S 2 floor 40 4000");
+  CHECK(ls[2] == "F 32 0");
+  CHECK(ls[3] == "F 34 2484");
+  CHECK(ls[4] == "F 36 2470");
+  CHECK(ls[5] == "L 2484 36 100 40");
+}
+
+MTEST_MAIN

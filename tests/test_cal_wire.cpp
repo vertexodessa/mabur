@@ -27,6 +27,15 @@ TEST(capacity_frame_is_body_sized) {
   CHECK(f.len == 1405);
 }
 
+TEST(floor_frame_parses_with_the_reference_index) {
+  auto p = build_cal_payload(Kind::Floor, 2, -1, 40, 3, 9, 1405);
+  CalFrameInfo f;
+  CHECK(parse_cal_payload(p.data(), p.size(), &f));
+  CHECK(f.kind == Kind::Floor);
+  CHECK(f.idx == -1);
+  CHECK(f.bw == 40);
+}
+
 TEST(fcs_tail_is_tolerated_on_both_sizes) {
   // devourer hands up the frame WITH its 4-byte FCS; RadioFrontend strips
   // only the dot11 header, so the body may arrive 4 bytes long, whatever
@@ -50,7 +59,7 @@ TEST(rejects_bad_kind_bw_flags) {
   CalFrameInfo f;
 
   auto bad_kind = base;
-  bad_kind[4] = 4;  // kind not in {1,2,3}
+  bad_kind[4] = 5;  // kind not in {1,2,3,4}
   CHECK(!parse_cal_payload(bad_kind.data(), bad_kind.size(), &f));
 
   auto bad_bw = base;

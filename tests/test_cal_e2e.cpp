@@ -222,6 +222,20 @@ struct FakeCapacityCtl : mabur::CalSweep::CapacityCtl {
   Kit* kit = nullptr;
   bool set_point(uint8_t mcs, uint8_t bw) override;
   mabur::BlastResult blast(const uint8_t* frame, size_t len, uint32_t dwell_ms) override;
+  // The floor sweep's unit (tests/fake_floor_unit.h): sends at the full
+  // rate at or above `floor_edge`, nothing below it, and a `marginal` value
+  // holds 4 s and slips in the fifth second.
+  uint8_t floor_edge = 0x24;
+  uint8_t marginal = 0;
+  uint8_t flown_floor = 0x35;  // DeviceCapacityCtl::flown_floor
+  uint8_t live_floor = 0x35;
+  std::vector<uint8_t> floors_set;
+  bool set_wide_floor(uint8_t f) override {
+    floors_set.push_back(f);
+    live_floor = f;
+    return true;
+  }
+  bool restore_wide_floor() override { return set_wide_floor(flown_floor); }
   // (mcs, bw) points where the drone cannot feed the air: blocked_pct low,
   // fewer frames offered than the air would carry, and nothing queued.
   std::vector<std::pair<uint8_t, uint8_t>> tx_bound;
@@ -342,7 +356,9 @@ struct Kit {
         live_margin_db(boot_cfg.radio.wall_margin_db),
         sweep(make_cal_cfg(boot_cfg)) {
     cap.kit = this;
+    cap.flown_floor = static_cast<uint8_t>(boot_cfg.radio.wide_tx_igi_floor);
     gs.set_peer(true, true);
+    gs.set_peer_wide(true);
   }
 
   bool drop(int pct) { return pct > 0 && static_cast<int>(rng() % 100) < pct; }
@@ -351,6 +367,7 @@ struct Kit {
 
   void gs_tick() {
     gs.set_peer(true, true);
+    gs.set_peer_wide(true);
     if (auto m = gs.due_mav(t)) {
       ++gs_msgs_sent;
       if (gs.radio_silent(t)) gs_talked_while_silent = true;
@@ -408,7 +425,8 @@ struct Kit {
   void cal_no_agg() { ++no_agg_calls; }
 
   void restore_operating_power() {
-    (void)reload_config();
+    cap.flown_floor = static_cast<uint8_t>(reload_config().radio.wide_tx_igi_floor);
+    cap.restore_wide_floor();
     // replace(plans, bw, zero_offset, clear_override): the rung's plan back
     // on the diffs, then the override cleared, in one hold.
     pwr.diffs_zeroed = false;
@@ -433,12 +451,17 @@ struct Kit {
       (void)reload_config();
       ++set_plans_calls;
       ++applies_ok;
+      if (a.has_floor) {
+        cap.flown_floor = a.floor;
+        cap.restore_wide_floor();
+      }
     } else {
       out.reason = err.substr(0, 49);
       ++applies_failed;
     }
     apply_log.push_back(std::to_string(a.bw) + (a.has_walls ? " walls" : "") +
-                        (a.has_eff ? " eff" : "") + (out.ok ? " ok" : " fail: " + err));
+                        (a.has_eff ? " eff" : "") + (a.has_floor ? " floor" : "") +
+                        (out.ok ? " ok" : " fail: " + err));
     ledger.record(out);
     send_cal(out);
     if (out.ok && a.has_walls) {
@@ -462,11 +485,11 @@ struct Kit {
         if (starting) {
           cal_owns_table = true;  // power_table.begin_cal()
           restore_owed.note_device_touched();
-          if (c->kind != cal::Kind::Capacity) cal_no_agg();
+          if (c->kind != cal::Kind::Capacity && c->kind != cal::Kind::Floor) cal_no_agg();
         }
         sweep.on_cmd(*c, t, pwr);
         const auto ack = sweep.take_ack();
-        if (starting && c->kind == cal::Kind::Capacity && ack &&
+        if (starting && (c->kind == cal::Kind::Capacity || c->kind == cal::Kind::Floor) && ack &&
             ack->result == cal::AckResult::Accepted)
           programmed_for_cal.push_back(c->bw);
         if (ack) send_cal(*ack);
@@ -620,6 +643,29 @@ mabur::BlastResult FakeCapacityCtl::blast(const uint8_t* frame, size_t len, uint
   ++points;
   cal::CalFrameInfo info;
   REQUIRE(cal::parse_cal_payload(frame, len, &info));
+  if (info.kind == cal::Kind::Floor) {
+    // The drone judges its own send rate; the GS hears frames only as
+    // progress. The clock runs through the dwell with the GS ticking.
+    mabur::BlastResult r;
+    const uint32_t secs = dwell_ms / 1000;
+    r.per_second.assign(secs, 0);
+    if (live_floor >= floor_edge) {
+      r.per_second.assign(secs, 2484);
+    } else if (marginal != 0 && live_floor == marginal) {
+      r.per_second.assign(secs, 2484);
+      if (secs > 4) r.per_second[4] = 2130;
+    }
+    for (uint32_t n : r.per_second) r.offered += n;
+    const std::vector<uint8_t> rx = with_fcs(frame, len);
+    for (uint32_t ms = 0; ms < dwell_ms; ++ms) {
+      if (ms % 500 == 0)
+        REQUIRE(maburgs::route_cal_body(kit->gs, 0, rx.data(), rx.size(), -58, true, kit->t) ==
+                26 + len + 4);
+      kit->gs_tick();
+      ++kit->t;
+    }
+    return r;
+  }
   REQUIRE(info.kind == cal::Kind::Capacity);
   // The frame's size on the air: QoS-Data header, payload, FCS.
   const size_t air_bytes = 26 + len + 4;
@@ -1077,6 +1123,51 @@ TEST(a_lossy_link_still_completes) {
   CHECK(exact == 30);
   CHECK(eff_unknown == 0);
   CHECK(slowest_ms < 100000);
+}
+
+
+// ---- the floor sweep --------------------------------------------------------
+
+TEST(a_floor_sweep_writes_the_edge_plus_margin_past_a_marginal_value) {
+  Kit k("floor");
+  k.cap.floor_edge = 0x24;
+  k.cap.marginal = 0x22;
+  REQUIRE(k.start({{cal::Kind::Floor, 40}, {cal::Kind::Power, 40}}));
+  k.run();
+  REQUIRE(k.gs.state() == State::Done);
+  if (verbose()) std::printf("  floor + power40: Done at %.1f s\n", k.t / 1000.0);
+  const auto snap = k.gs.snapshot();
+  CHECK(snap.floor.rep.floor == 0x24);
+  CHECK(snap.floor.written == 0x28);
+  CHECK(snap.floor.applied);
+  // The power40 sweep that followed flew at the floor just written.
+  CHECK(k.cap.live_floor == 0x28);
+  CHECK(!k.gs_talked_while_silent);
+  k.drain();
+  CHECK(k.loaded().radio.wide_tx_igi_floor == 0x28);
+  CHECK(k.read().find("# a comment that must survive") != std::string::npos);
+  // One backup for the run, the file as it was before the floor.
+  CHECK(read_file(k.file.path + ".pre-cal") == std::string(kFixture));
+  // The run's end puts the written floor up, not the boot one.
+  CHECK(k.cap.live_floor == 0x28);
+}
+
+TEST(a_unit_with_no_passing_floor_keeps_its_config) {
+  Kit k("floor_none");
+  k.cap.floor_edge = 0x60;  // above every candidate
+  REQUIRE(k.start({{cal::Kind::Floor, 40}}));
+  k.run();
+  REQUIRE(k.gs.state() == State::Done);
+  // The whole walk -- reference, 12 candidates -- inside the budget.
+  if (verbose()) std::printf("  floor (none passes): Done at %.1f s\n", k.t / 1000.0);
+  CHECK(k.t < 90000);
+  const auto snap = k.gs.snapshot();
+  CHECK(snap.floor.have);
+  CHECK(snap.floor.written == 0);
+  CHECK(snap.floor.note == "no floor passed");
+  k.drain();
+  CHECK(k.read() == std::string(kFixture));
+  CHECK(k.cap.live_floor == k.boot_cfg.radio.wide_tx_igi_floor);
 }
 
 MTEST_MAIN

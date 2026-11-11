@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "mabur/cal_floor.h"
 #include "mabur/cal_proto.h"
 #include "mabur/cal_wire.h"
 #include "mabur/rc_proto.h"
@@ -80,6 +81,18 @@ struct WidthResult {
   std::array<int, 8> verify_pct{-1, -1, -1, -1, -1, -1, -1, -1};
 };
 
+// What the run's floor sweep produced (cal_floor.h).
+struct FloorResult {
+  bool ran = false;   // the run held a floor sweep the drone accepted
+  bool have = false;  // its SweepDone arrived: `rep` is the drone's report
+  mabur::cal::FloorReport rep{};
+  std::vector<uint8_t> cands;  // the candidates the sweep commanded
+  uint8_t written = 0;         // the value sent to the drone; 0 = none
+  bool applied = false;        // the drone adopted `written`
+  // Why nothing was written, or the drone's note on the apply.
+  std::string note;
+};
+
 struct CalSnapshot;
 
 class CalSession {
@@ -98,11 +111,14 @@ class CalSession {
       : cfg_(cfg), log_(log), picker_(picker) {}
 
   // Starts a run over `sweeps`. The list is sorted per width ascending,
-  // power before capacity (so a capacity sweep measures at the power its
-  // own width's walls just parked), and deduplicated. Refuses (false, with
-  // `*err`) an empty list, a Verify or non-20/40 entry, a run already in
-  // progress (Picking included), a link that is down, or a peer without
-  // CAP_CALIBRATE.
+  // floor before power before capacity (the power and capacity sweeps fly
+  // at the floor the run just measured, and a capacity sweep at the power
+  // its own width's walls just parked), and deduplicated. Refuses (false,
+  // with `*err`) an empty list, a Verify or non-20/40 entry, a Floor entry
+  // at 20 MHz, a run already in progress (Picking included), a link that
+  // is down, or a peer without CAP_CALIBRATE. A Floor entry against a peer
+  // without CAP_CAL_WIDE is dropped, not refused: the run goes on with the
+  // rest and the floor result says why.
   bool start(uint32_t nonce, std::vector<mabur::cal::SweepSpec> sweeps, uint64_t now_ms,
              std::string* err);
 
@@ -157,6 +173,9 @@ class CalSession {
   // Told every tick: link state, whether the peer advertised
   // CAP_CALIBRATE, and the pair's tag context.
   void set_peer(bool linked, bool cal_capable, mabur::rc::TagCtx ctx = {});
+  // Whether the peer advertised CAP_CAL_WIDE (it runs the floor sweep).
+  // Told every tick with set_peer; false until told.
+  void set_peer_wide(bool wide) { peer_wide_ = wide; }
 
   // The tag context every cal message of the current run is packed under:
   // set_peer()'s ctx as of the moment the run first commands the drone
@@ -193,6 +212,7 @@ class CalSession {
   void finish_sweep(uint64_t now_ms);
   bool analyze_power();            // true: an apply is due
   bool analyze_capacity_sweep();   // true: an apply is due
+  bool analyze_floor();            // true: an apply is due
   void begin_apply(uint64_t now_ms);
   void on_applied(const mabur::cal::Applied& a, uint64_t now_ms);
   void begin_verify(uint64_t now_ms);
@@ -219,6 +239,7 @@ class CalSession {
   uint32_t nonce_ = 0;
   bool linked_ = false;
   bool cal_capable_ = false;
+  bool peer_wide_ = false;
   mabur::rc::TagCtx peer_ctx_{};
   mabur::rc::TagCtx tag_ctx_{};
   std::string fail_reason_;
@@ -277,6 +298,7 @@ class CalSession {
   bool apply_wrote_walls_ = false;
 
   std::array<WidthResult, 2> width_{};
+  FloorResult floor_{};
 };
 
 struct CalSnapshot {
@@ -291,6 +313,7 @@ struct CalSnapshot {
   uint8_t flags = 0;  // the stamp flags the drone's ack announced
   uint32_t stamp_mismatch = 0;  // frames dropped for a kind/width/flags mismatch
   std::array<WidthResult, 2> width;  // [0] = 20 MHz, [1] = 40 MHz
+  FloorResult floor;
   std::string fail_reason;
 };
 

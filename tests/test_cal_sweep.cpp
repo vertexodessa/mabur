@@ -1,5 +1,7 @@
 #include "mtest.h"
 #include "cal_sweep.h"
+#include "fake_floor_unit.h"
+#include "mabur/cal_floor.h"
 #include "mabur/cal_proto.h"
 #include "mabur/cal_wire.h"
 #include "radio_tx.h"
@@ -827,6 +829,172 @@ TEST(starts_sweep_predicts_on_cmd_and_run_nonce_names_the_run) {
   REQUIRE(!s.active());
   CHECK(!s.starts_sweep(power_cmd(5, 3)));  // the closed nonce never reopens
   CHECK(s.starts_sweep(power_cmd(6, 0)));
+}
+
+
+// ---- floor sweep (cal_floor.h) -------------------------------------------
+
+namespace {
+
+void run_floor(CalSweep& s, RadioTx& tx, FakePowerCtl& pwr, test::FakeFloorUnit& unit) {
+  for (uint64_t t = 0; t < 600000 && s.state() == CalSweep::State::Sweeping; t += 5)
+    s.pump(t, tx, pwr, unit);
+}
+
+}  // namespace
+
+TEST(floor_sweep_skips_a_marginal_value_and_reports_the_edge) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  test::FakeFloorUnit unit;
+  unit.edge = 0x24;
+  unit.marginal = 0x22;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  auto ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::Accepted);
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.ref_fps == 2484);
+  CHECK(r.floor == 0x24);  // 0x22 passed its 4 s dwell and failed its 8 s one
+  CHECK(r.tried == 3);
+  CHECK(r.min_fps[0] == 0);
+  CHECK(r.min_fps[1] == 2484);
+  CHECK(r.min_fps[2] == 2484);
+  CHECK(r.confirm_pct == 100);
+  // Reference, 0x20, 0x22 + its confirmation, 0x24 + its confirmation.
+  REQUIRE(unit.blasts.size() == 6);
+  CHECK(unit.blasts[0] == std::make_pair(uint8_t{0x7f}, cal::kFloorRefDwellMs));
+  CHECK(unit.blasts[3] == std::make_pair(uint8_t{0x22}, cal::kFloorConfirmMs));
+  for (const auto& p : unit.points) CHECK(p == std::make_pair(cal::kFloorMcs, uint8_t{40}));
+  // The sweep ends at the floor the drone flies.
+  CHECK(unit.restores == 1);
+  CHECK(unit.floor == 0x35);
+}
+
+TEST(floor_sweep_with_no_passing_value_reports_none) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  test::FakeFloorUnit unit;
+  unit.edge = 0x40;  // above every candidate
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.floor == 0);
+  CHECK(r.tried == 12);
+  CHECK(unit.floor == 0x35);
+}
+
+namespace {
+
+// 0x22 and 0x24 both marginal, the edge at 0x26.
+struct TwoMarginal : test::FakeFloorUnit {
+  BlastResult blast(const uint8_t* f, size_t len, uint32_t dwell_ms) override {
+    if (floor == 0x22 || floor == 0x24) marginal = floor;
+    return FakeFloorUnit::blast(f, len, dwell_ms);
+  }
+};
+
+struct StampCapture : test::FakeFloorUnit {
+  std::vector<int> idx;
+  BlastResult blast(const uint8_t* f, size_t len, uint32_t dwell_ms) override {
+    cal::CalFrameInfo info;
+    if (cal::parse_cal_payload(f, len, &info)) {
+      CHECK(info.kind == cal::Kind::Floor);
+      CHECK(info.bw == 40);
+      idx.push_back(info.idx);
+    }
+    return FakeFloorUnit::blast(f, len, dwell_ms);
+  }
+};
+
+}  // namespace
+
+TEST(floor_sweep_stops_after_two_failed_confirmations) {
+  // The walk stops at the second marginal value rather than run on to the
+  // edge, which bounds the GS's silent window.
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  TwoMarginal unit;
+  unit.edge = 0x26;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.floor == 0);
+  CHECK(r.tried == 3);
+  CHECK(r.confirm_pct == 85);  // 2130 / 2484
+}
+
+TEST(floor_sweep_stamps_the_candidate_index) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  StampCapture unit;
+  unit.edge = 0x22;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  CHECK(unit.idx == std::vector<int>({-1, 0, 1, 1}));
+}
+
+TEST(floor_sweep_is_refused_without_a_runtime_floor_or_at_20_mhz) {
+  FakePowerCtl pwr;
+  CalSweepCfg no_floor;
+  no_floor.floor_ok = false;
+  CalSweep s(no_floor);
+  const auto c = cal::make_floor_sweep(7, 0);
+  CHECK(!s.starts_sweep(c));
+  s.on_cmd(c, 0, pwr);
+  auto ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::Unsupported);
+  CHECK(!s.active());
+  CHECK(pwr.read_anchor_calls == 0);
+  CHECK(pwr.zero_diff_calls == 0);
+
+  CalSweep t(CalSweepCfg{});
+  auto c20 = cal::make_floor_sweep(8, 0);
+  c20.bw = 20;
+  t.on_cmd(c20, 0, pwr);
+  ack = t.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::Unsupported);
+  CHECK(!t.active());
+}
+
+TEST(an_unsupported_floor_leaves_an_open_run_running) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  FakeCapacityCtl cap;
+  CalSweepCfg no_floor;
+  no_floor.floor_ok = false;
+  CalSweep s(no_floor);
+  s.on_cmd(power_cmd(9, 0, 0x01, 0, 0, 20, 3), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_to_quiescence(s, tx, pwr, cap);
+  REQUIRE(s.take_done().has_value());
+  s.on_cmd(cal::make_floor_sweep(9, 1), 2000, pwr);
+  auto ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::Unsupported);
+  CHECK(s.active());
+  CHECK(s.run_nonce() == 9);
 }
 
 MTEST_MAIN

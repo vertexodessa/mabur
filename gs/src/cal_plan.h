@@ -50,6 +50,8 @@ std::vector<std::pair<uint8_t, int>> verify_cells(const std::array<int, 8>& park
 // Power: 8 rates * (idx_hi - idx_lo + 1) cells, each settle_ms + frames_per_cell
 //   * gap_us / 1000.
 // Capacity: one dwell per rate in mcs_mask, each settle_ms + dwell_ms.
+// Floor: the longest walk cal_floor.h allows (floor_sweep_max_ms); the
+//   drone's SweepDone normally ends the window well before it.
 uint32_t sweep_duration_ms(const mabur::cal::SweepCmd& c);
 
 // How long a verify pass over `cells` parked rates takes: cells *

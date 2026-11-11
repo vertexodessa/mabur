@@ -4,8 +4,8 @@
     maburcal start [tok...]         begin a run (streams progress, then the
                                     final table); with no tokens the GS
                                     runs its defaults, otherwise each token
-                                    is power20|power40|cap20|cap40, any
-                                    order
+                                    is power20|power40|cap20|cap40|floor,
+                                    any order
     maburcal status                one-line progress of a running session
     maburcal abort                 abandon the running session
     maburcal report <cal.log>      re-render a saved run, no daemon involved
@@ -70,7 +70,7 @@ DEFAULT_DEBUG_LOG_DIR = "/media/dvr/log"
 # docs/calibration.md). Since this reader has never stored C rows, a v2 file
 # renders identically to a v1 one. Every version stays readable because
 # recordings outlive the code that wrote them (CLAUDE.md).
-KNOWN_CALLOG_VERSIONS = (1, 2, 3, 4, 5)
+KNOWN_CALLOG_VERSIONS = (1, 2, 3, 4, 5, 6)
 
 # flags: 1=no_dip 2=undetermined 4=narrow 8=saturated 16=card_disagree
 # 32=drift (retired from callog 4 on, but still nameable on an older file)
@@ -126,6 +126,12 @@ class _Run:
         # blocked_pct, flags, span_ms); span_ms is None before callog 5
         self.caps_by_bw = {20: {}, 40: {}}
         self.applies = []  # [(bw, ok, reason), ...], one per A row
+        # callog 6's floor sweep: F rows [(floor, min_fps), ...] and the L
+        # row (ref_fps, found, confirm_pct, written); None = no floor sweep
+        # reported in this run.
+        self.floor_rows = []
+        self.floor = None
+        self.floor_swept = False
 
     def undetermined(self, wall):
         """True when `wall` is the "no wall could be derived" sentinel for
@@ -157,14 +163,26 @@ class _Run:
             return  # non-numeric field: skip the line, not the file
 
     def _feed_line_v4(self, tag, tok):
-        """callog 4 and 5's shape: S scopes the width every C/W/P/V row below it
+        """callog 4-6's shape: S scopes the width every C/W/P/V row below it
         belongs to, until the next S; A carries its own bw and is never
         scoped by S. Raises ValueError on a bad numeric field, caught by
         feed_line's own try/except -- the single place that turns a
         malformed line into a no-op rather than a crash."""
         if tag == "S" and len(tok) == 5:
+            if tok[2] == "floor":
+                # Its rows are F/L, scoped by nothing; it measures no
+                # table, so it opens no width block of its own.
+                self.cur_bw = None
+                self.floor_swept = True
+                return
             self.cur_bw = int(tok[3])
             self.bws_swept.add(self.cur_bw)
+            return
+        if tag == "F" and len(tok) == 3:
+            self.floor_rows.append((int(tok[1]), int(tok[2])))
+            return
+        if tag == "L" and len(tok) == 5:
+            self.floor = tuple(int(x) for x in tok[1:])
             return
         if tag == "A" and len(tok) >= 3:
             bw = int(tok[1])
@@ -406,8 +424,28 @@ def _render_run_v4(run):
     for bw, ok, reason in run.applies:
         if ok and reason and reason != "ok":
             lines.append(f"{bw} MHz apply: {reason}")
+    lines.extend(_floor_lines(run))
     lines.append(_apply_status_line_v4(run))
     return "\n".join(lines)
+
+
+def _floor_lines(run):
+    """The floor sweep's outcome (callog 6): what was found and written,
+    then each candidate's worst second against the reference rate."""
+    if not run.floor_swept:
+        return []
+    if run.floor is None:
+        return ["floor40: no result (the drone's report was lost)"]
+    ref, found, confirm, written = run.floor
+    if found:
+        head = (f"floor40: 0x{found:02x} passed ({confirm}% worst second confirmed), "
+                f"0x{written:02x} written")
+    elif ref == 0:
+        head = "floor40: the reference point sent nothing; nothing written"
+    else:
+        head = "floor40: no value passed; nothing written"
+    tried = " ".join(f"0x{f:02x}:{n}" for f, n in run.floor_rows)
+    return [head, f"  worst second, frames/s (reference {ref}): {tried}"]
 
 
 def _apply_status_line_v4(run):
@@ -659,7 +697,7 @@ def main(argv=None):
     p_start = sub.add_parser("start", help="begin a calibration run")
     p_start.add_argument(
         "tokens", nargs="*",
-        help="power20|power40|cap20|cap40, any order; defaults to the "
+        help="power20|power40|cap20|cap40|floor, any order; defaults to the "
              "GS's own composition when omitted")
     p_start.set_defaults(func=cmd_start)
 
