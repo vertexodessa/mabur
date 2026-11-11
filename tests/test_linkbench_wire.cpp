@@ -41,7 +41,9 @@ TEST(bench_packet_min_size_is_header_only) {
 TEST(dot11_header_layout) {
   auto h = build_dot11_header(0x123);
   REQUIRE(h.size() == kDot11HeaderLen);
-  CHECK(h[0] == 0x40);  // probe-req, matches maburd/maburgs canonical frames
+  CHECK(h[0] == 0x88);  // QoS-Data, as maburd's video frames
+  CHECK(h[24] == 0x20);  // TID 0, No-Ack
+  CHECK(h[25] == 0x00);
   for (int i = 4; i < 10; ++i) CHECK(h[i] == 0xff);       // DA broadcast
   const uint8_t sa[6] = {0x57, 0x42, 0x75, 0x05, 0xd6, 0x00};
   CHECK(std::memcmp(h.data() + 10, sa, 6) == 0);          // SA
