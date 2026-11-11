@@ -569,4 +569,79 @@ TEST(an_efficiency_of_exactly_one_still_loads) {
   CHECK(load_config(path, nullptr).air_clock.efficiency_20[0] == 1.0);
 }
 
+
+// ---- radio.wide_tx_igi_floor ------------------------------------------------
+
+namespace {
+
+CalWrite floor_write(int floor) {
+  CalWrite w;
+  w.bw = 40;
+  w.has_floor = true;
+  w.floor = floor;
+  return w;
+}
+
+std::string read_all(const std::string& path) {
+  std::ifstream f(path);
+  std::stringstream s;
+  s << f.rdbuf();
+  return s.str();
+}
+
+}  // namespace
+
+TEST(a_floor_write_rewrites_the_key_in_place_and_keeps_its_comment) {
+  const std::string text = std::string(kSample).replace(
+      std::string(kSample).find("legacy_wall_rel"), 0,
+      "wide_tx_igi_floor = 53   # receiver gain floor\n");
+  PatchStatus st;
+  const std::string out = patch_toml(text, floor_write(0x28), &st);
+  CHECK(st.floor);
+  CHECK(out.find("wide_tx_igi_floor = 40   # receiver gain floor\n") != std::string::npos);
+  // Nothing else moved.
+  CHECK(out.size() == text.size());
+  CHECK(!st.walls && !st.eff && !st.power_mode);
+}
+
+TEST(a_floor_write_inserts_the_key_after_power_mode) {
+  PatchStatus st;
+  const std::string out = patch_toml(kSample, floor_write(0x28), &st);
+  CHECK(st.floor);
+  CHECK(out.find("power_mode = \"none\"      # set to offset to use the calibrated walls\n"
+                 "wide_tx_igi_floor = 40\n") != std::string::npos);
+}
+
+TEST(a_floor_apply_publishes_a_file_that_loads_with_the_floor) {
+  const std::string path = std::string(MABUR_TEST_SCRATCH_DIR) + "/cal_floor.toml";
+  { std::ofstream f(path); f << kSample; }
+  std::string err;
+  REQUIRE(apply_calibration(path, floor_write(0x28), 1.0, /*backup=*/true, &err) ==
+          ApplyResult::Ok);
+  CHECK(load_config(path).radio.wide_tx_igi_floor == 0x28);
+  CHECK(read_all(path + ".pre-cal") == kSample);
+  CHECK(read_all(path).find("# a comment that must survive") != std::string::npos);
+}
+
+TEST(a_floor_outside_the_field_is_refused_untouched) {
+  const std::string path = std::string(MABUR_TEST_SCRATCH_DIR) + "/cal_floor_range.toml";
+  { std::ofstream f(path); f << kSample; }
+  std::string err;
+  CHECK(apply_calibration(path, floor_write(0), 1.0, true, &err) == ApplyResult::OutOfRange);
+  CHECK(err.find("wide_tx_igi_floor") != std::string::npos);
+  CHECK(apply_calibration(path, floor_write(0x80), 1.0, true, &err) ==
+        ApplyResult::OutOfRange);
+  CHECK(read_all(path) == kSample);
+}
+
+TEST(a_floor_write_without_an_anchor_is_refused) {
+  const std::string path = std::string(MABUR_TEST_SCRATCH_DIR) + "/cal_floor_noanchor.toml";
+  { std::ofstream f(path); f << kSampleNoAnchorAtAll; }
+  std::string err;
+  CHECK(apply_calibration(path, floor_write(0x28), 1.0, true, &err) ==
+        ApplyResult::KeyNotFound);
+  CHECK(err.find("wide_tx_igi_floor") != std::string::npos);
+  CHECK(read_all(path) == kSampleNoAnchorAtAll);
+}
+
 MTEST_MAIN

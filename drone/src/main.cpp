@@ -22,6 +22,7 @@
 #include <cstring>
 #include <deque>
 #include <memory>
+#include <condition_variable>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -1491,6 +1492,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // every shared-taker before it enters. glibc's rwlock is reader-preferring
   // and the writer runs on the agent thread — see await_retune_gate.
   std::atomic<bool> retune_waiting{false};
+  // The radio has a runtime wide-TX receive-gain floor (set once the
+  // bring-up has joined; the TX writer's calibration engine reads it).
+  std::atomic<bool> floor_runtime{false};
 
   DevourerSink dev_sink;
   dev_sink.dev = rtl_device.get();
@@ -2808,7 +2812,45 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       dev->SetTxPowerIndexOverride(-1);
       return ok;
     }
+    // The floor the drone flies outside a floor sweep: the configured one,
+    // then whatever an apply of the run wrote.
+    uint8_t flown_floor = 0x35;
+    bool set_wide_floor(uint8_t floor) override {
+      await_retune_gate(gate_waiting);
+      std::shared_lock<std::shared_mutex> sg;
+      if (gate) sg = std::shared_lock<std::shared_mutex>(*gate);
+      return dev->SetWideTxIgiFloor(floor);
+    }
+    bool restore_wide_floor() override { return set_wide_floor(flown_floor); }
     BlastResult blast(const uint8_t* frame, size_t len, uint32_t dwell_ms) override {
+      // A floor below the unit's edge holds every 40 MHz frame in the chip,
+      // and maburd's DATA sends wait on the chip without a timeout
+      // (DeviceConfig::Tx::no_cancel_multipkt), so a floor sweep's blast
+      // would never return. A send still pending 1 s past the dwell gets the
+      // floor raised to the top of the field (cal_floor.h kFloorRef): the
+      // receiver goes deaf, the channel reads idle, the held frames air and
+      // the send returns. That one register write overlaps a pending
+      // bulk-OUT, against the device's threading rule; the stalled send
+      // holds no register lock, and the alternative is a TX writer stuck
+      // until the daemon restarts. The seconds it stalled read 0 frames, so
+      // the point fails. The run's end puts the flown floor back.
+      std::mutex wd_mu;
+      std::condition_variable wd_cv;
+      bool wd_done = false;
+      const auto wd_deadline = std::chrono::steady_clock::now() +
+                               std::chrono::milliseconds(static_cast<uint64_t>(dwell_ms) + 1000);
+      std::thread watchdog([&] {
+        std::unique_lock<std::mutex> lk(wd_mu);
+        if (wd_cv.wait_until(lk, wd_deadline, [&] { return wd_done; })) return;
+        lk.unlock();
+        const bool ok = dev->SetWideTxIgiFloor(cal::kFloorRef);
+        std::fprintf(stderr, "maburd cal: TX stalled past the dwell; floor raised to 0x%02x (%s)\n",
+                     static_cast<unsigned>(cal::kFloorRef), ok ? "ok" : "failed");
+      });
+      // Frames per whole second of the dwell, by when each send returned;
+      // a send returning past the dwell counts in none.
+      const uint32_t secs = dwell_ms / 1000;
+      std::vector<uint32_t> per_second(secs, 0);
       // Stream 1, the enhancement layer: the bulk of video. set_point put
       // the same spec on both layers.
       std::vector<UepBody> bodies(3);
@@ -2832,16 +2874,26 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
           }
         }
         const uint64_t c0 = now;
-        offered += tx->send_bodies(bodies);
+        const size_t sent = tx->send_bodies(bodies);
+        offered += sent;
         now = now_steady_us();
         call_us += now - c0;
+        const uint64_t sec = (now - t0) / 1000000;
+        if (sec < secs) per_second[sec] += static_cast<uint32_t>(sent);
       }
+      {
+        std::lock_guard<std::mutex> lk(wd_mu);
+        wd_done = true;
+      }
+      wd_cv.notify_one();
+      watchdog.join();
       const uint64_t elapsed = now - t0;
       const uint64_t blocked = pool ? pool->space_wait_us() - wait0 : call_us;
       BlastResult r;
       r.offered = static_cast<uint32_t>(std::min<uint64_t>(offered, UINT32_MAX));
       r.blocked_pct =
           elapsed ? static_cast<uint8_t>(std::min<uint64_t>(100, blocked * 100 / elapsed)) : 0;
+      r.per_second = std::move(per_second);
       return r;
     }
   };
@@ -2865,12 +2917,14 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     auto make_cal_cfg = [&](bool ldpc) {
       CalSweepCfg c;
       c.ldpc = ldpc;
+      c.floor_ok = floor_runtime.load(std::memory_order_acquire);
       c.capacity_frame_len =
           13 + static_cast<size_t>(cfg.fec.blocks_per_body[1]) *
                    (16 + static_cast<size_t>(cfg.fec.symbol_size[1]));
       return c;
     };
     bool cal_ldpc = live_ldpc.load(std::memory_order_acquire);
+    bool cal_floor_ok = floor_runtime.load(std::memory_order_acquire);
     CalSweep cal_sweep(make_cal_cfg(cal_ldpc));
     DevicePowerCtl pwr;
     pwr.dev = rtl_device.get();
@@ -2884,6 +2938,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     cap.gate_waiting = &retune_waiting;
     cap.ampdu = cfg.ampdu;
     cap.ldpc = cal_ldpc;
+    cap.flown_floor = static_cast<uint8_t>(cfg.radio.wide_tx_igi_floor);
     // One drone->GS calibration message (ack, done, applied) as its own
     // untagged T_MAV frame on the control path: the shared uplink counter
     // and dot11 sequence, the mutex-guarded dev_sink.send(). Sent whatever
@@ -2952,6 +3007,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       if (!power_table.replace(plans_for(live_cfg.radio, live_wall_margin.load()), bw,
                                /*zero_offset=*/true, /*clear_override=*/true))
         std::fprintf(stderr, "maburd cal: SetTxPowerRateDiffs failed restoring after the run\n");
+      // The floor from the file: what the run wrote, or what it found
+      // there (a floor sweep or its watchdog moves the live one).
+      cap.flown_floor = static_cast<uint8_t>(live_cfg.radio.wide_tx_igi_floor);
+      if (floor_runtime.load(std::memory_order_acquire) && !cap.restore_wide_floor())
+        std::fprintf(stderr, "maburd cal: SetWideTxIgiFloor failed restoring after the run\n");
     };
     // An ApplyCmd drained from the engine: validate/patch/publish this
     // width's walls and/or efficiency (cal_apply.h), answer APPLIED, and for
@@ -2985,9 +3045,16 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         // An ok apply that kept something the GS did not send says so.
         out.reason = note.substr(0, 49);
         power_table.set_plans(plans_for(reload_config().radio, margin_db));
-        std::fprintf(stderr, "maburd cal: applied %u MHz%s%s%s%s\n", static_cast<unsigned>(a.bw),
+        // The rest of the run's 40 MHz sweeps fly the floor just written.
+        if (a.has_floor) {
+          cap.flown_floor = a.floor;
+          if (!cap.restore_wide_floor())
+            std::fprintf(stderr, "maburd cal: SetWideTxIgiFloor(0x%02x) failed\n",
+                         static_cast<unsigned>(a.floor));
+        }
+        std::fprintf(stderr, "maburd cal: applied %u MHz%s%s%s%s%s\n", static_cast<unsigned>(a.bw),
                      a.has_walls ? " walls" : "", a.has_eff ? " efficiency" : "",
-                     note.empty() ? "" : " -- ", note.c_str());
+                     a.has_floor ? " floor" : "", note.empty() ? "" : " -- ", note.c_str());
       } else {
         out.reason = loader_reason(err).substr(0, 49);
         std::fprintf(stderr, "maburd cal: apply %u MHz refused: %s\n", static_cast<unsigned>(a.bw),
@@ -3021,8 +3088,12 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     while (!g_devourer_should_stop) {
       if (!cal_sweep.active()) {
         const bool ldpc = live_ldpc.load(std::memory_order_acquire);
-        if (ldpc != cal_ldpc) {
+        // The floor probe lands once the bring-up has joined, after this
+        // thread built its first engine.
+        const bool floor_ok = floor_runtime.load(std::memory_order_acquire);
+        if (ldpc != cal_ldpc || floor_ok != cal_floor_ok) {
           cal_ldpc = ldpc;
+          cal_floor_ok = floor_ok;
           cal_sweep = CalSweep(make_cal_cfg(ldpc));
           cap.ldpc = ldpc;
         }
@@ -3046,7 +3117,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
             // program the production mode themselves.
             power_table.begin_cal();
             restore_owed.note_device_touched();
-            if (c->kind != cal::Kind::Capacity) cal_no_agg();
+            if (c->kind != cal::Kind::Capacity && c->kind != cal::Kind::Floor) cal_no_agg();
           }
           cal_sweep.on_cmd(*c, cal_now, pwr);
           const auto ack = cal_sweep.take_ack();
@@ -3054,8 +3125,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
           // table: programmed only after on_cmd() accepted it, since a new
           // run zeroes the diffs for its anchor read first. Never for a
           // refused command or a repeat of the running sweep.
-          if (starting && c->kind == cal::Kind::Capacity && ack &&
-              ack->result == cal::AckResult::Accepted)
+          if (starting && (c->kind == cal::Kind::Capacity || c->kind == cal::Kind::Floor) &&
+              ack && ack->result == cal::AckResult::Accepted)
             power_table.program_for_cal(c->bw);
           // The ack goes out HERE -- before this thread pumps the sweep the
           // command touched, whose first cell waits 200 ms for it -- on every
@@ -3534,6 +3605,12 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                  static_cast<unsigned>(cfg.radio.wide_tx_igi_floor));
   else
     std::fprintf(stderr, "maburd radio: no wide-TX receive-gain floor -- a card that needs one stops transmitting at 40 MHz\n");
+  // Whether calibration can try floors one after another: the setter is
+  // false on every generation without a floor. Setting the configured value
+  // is a no-op where it exists. Before device_ready: no send overlaps it.
+  floor_runtime.store(
+      rtl_device->SetWideTxIgiFloor(static_cast<uint8_t>(cfg.radio.wide_tx_igi_floor)),
+      std::memory_order_release);
 
   // Always start clean: a flat TXAGC index override is sticky in the chip
   // across a process restart, and the ONLY place that ever sets one is a

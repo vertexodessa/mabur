@@ -21,6 +21,8 @@ CalWrite cal_write_for(const cal::ApplyCmd& a, uint8_t stamp_flags) {
   }
   w.legacy_wall = a.legacy == cal::kWallLeave ? rc::kWallUndetermined : a.legacy;
   w.cal_flags = cal_flags_name(stamp_flags);
+  w.has_floor = a.has_floor;
+  w.floor = a.floor;
   return w;
 }
 
