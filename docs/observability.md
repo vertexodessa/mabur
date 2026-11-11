@@ -200,7 +200,7 @@ once a UDP client has sent the endpoint a datagram. maburtop draws a
 while the run owns the air — `await_ack` through `verify`; absent while
 the channel pick runs and after `done`/`failed`. `state` is the name
 `maburcal status` prints; `sweep` is `"k/n"` (1-based, of the run's sweep
-list); `kind` is `power`, `capacity` or `verify`; `bw` 20 or 40; `cell` is
+list); `kind` is `power`, `capacity`, `verify` or `floor`; `bw` 20 or 40; `cell` is
 `"i/n"`, the cell of the latest frame tallied in the running sweep or
 verify pass. maburtop draws `CAL <kind><bw> <i>/<n>` (e.g. `CAL power40
 312/840`, warn colour) on the top bar after the `mav` cell and in the

@@ -41,7 +41,8 @@ typedef enum MABUR_CAL_KIND
    MABUR_CAL_KIND_POWER=1, /* TX-power wall sweep. | */
    MABUR_CAL_KIND_VERIFY=2, /* Verification pass at the walls found by a power sweep. | */
    MABUR_CAL_KIND_CAPACITY=3, /* Link-capacity dwell sweep. | */
-   MABUR_CAL_KIND_ENUM_END=4, /*  | */
+   MABUR_CAL_KIND_FLOOR=4, /* Wide-TX receive-gain floor sweep (40 MHz only). | */
+   MABUR_CAL_KIND_ENUM_END=5, /*  | */
 } MABUR_CAL_KIND;
 #endif
 
@@ -54,7 +55,8 @@ typedef enum MABUR_CAL_ACK_RESULT
    MABUR_CAL_ACK_RESULT_ANCHOR_UNREADABLE=1, /* The drone has no readable calibration anchor: the chip did not report its TXAGC reference, or would not zero its rate diffs for a clean read. | */
    MABUR_CAL_ACK_RESULT_BUSY=2, /* The drone is already running a sweep. | */
    MABUR_CAL_ACK_RESULT_UNSUPPORTED=3, /* The requested sweep is not supported by this drone build. | */
-   MABUR_CAL_ACK_RESULT_ENUM_END=4, /*  | */
+   MABUR_CAL_ACK_RESULT_NO_PAIR=4, /* The sweep is 40 MHz and the drone's channel has no 40 MHz pair. | */
+   MABUR_CAL_ACK_RESULT_ENUM_END=5, /*  | */
 } MABUR_CAL_ACK_RESULT;
 #endif
 

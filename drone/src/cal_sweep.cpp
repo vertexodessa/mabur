@@ -44,7 +44,24 @@ uint16_t CalSweep::remaining_start_ms(uint64_t now_ms) const {
   return static_cast<uint16_t>(remaining > 65535 ? 65535 : remaining);
 }
 
+bool CalSweep::supported(const cal::SweepCmd& c) const {
+  switch (c.kind) {
+    case cal::Kind::Power:
+    case cal::Kind::Capacity:
+      return true;
+    case cal::Kind::Floor:
+      // The floor is a 40 MHz thing, and only a radio with a runtime floor
+      // can try values one after another.
+      return cfg_.floor_ok && c.bw == 40;
+    default:
+      // Verify is armed by the owner, never commanded; anything else is a
+      // kind newer than this build.
+      return false;
+  }
+}
+
 bool CalSweep::starts_sweep(const cal::SweepCmd& c) const {
+  if (!supported(c)) return false;
   // The same three branches on_cmd() takes, without the side effects.
   if (!has_session_ || c.nonce != nonce_)
     return !(last_nonce_valid_ && c.nonce == last_closed_nonce_);
@@ -53,6 +70,15 @@ bool CalSweep::starts_sweep(const cal::SweepCmd& c) const {
 
 void CalSweep::on_cmd(const cal::SweepCmd& c, uint64_t now_ms, PowerCtl& pwr) {
   const bool new_session = !has_session_ || c.nonce != nonce_;
+  // A kind this drone does not run is refused before anything is touched:
+  // no run opens, an open one is left as it is, and the GS (which goes on
+  // with the sweeps both ends know) hears why. Every repeat re-refuses.
+  if (!supported(c)) {
+    if (new_session && last_nonce_valid_ && c.nonce == last_closed_nonce_) return;
+    if (!new_session) repeat_done_.reset();
+    pending_ack_ = cal::SweepAck{c.nonce, c.seq, cal::AckResult::Unsupported, 0, stamp_flags()};
+    return;
+  }
   // Any SWEEP of the open run is taken as the GS having moved past the
   // last SweepDone (take_done()) -- not proof that it heard it -- whatever
   // on_cmd does with it below.
@@ -161,12 +187,19 @@ void CalSweep::on_cmd(const cal::SweepCmd& c, uint64_t now_ms, PowerCtl& pwr) {
   // sweep of this run -- take_pending_apply() must not hand out a result
   // for a sweep that just got superseded.
   pending_apply_.reset();
-  // Capacity flies the production power plan the owner programs for
-  // this width -- restore the override to the anchor in case a
+  // Capacity and Floor fly the production power plan the owner programs
+  // for this width -- restore the override to the anchor in case a
   // Power/Verify sweep earlier in this run left it parked at a swept
   // cell. Power/Verify instead program the override per cell, inside
   // pump().
-  if (c.kind == cal::Kind::Capacity) pwr.set_index_override(anchor_idx_);
+  if (c.kind != cal::Kind::Power) pwr.set_index_override(anchor_idx_);
+  if (c.kind == cal::Kind::Floor) {
+    floor_cands_ = cal::floor_candidates(c.idx_lo, c.idx_hi);
+    floor_phase_ = floor_cands_.empty() ? FloorPhase::Done : FloorPhase::Ref;
+    floor_i_ = 0;
+    floor_confirms_ = 0;
+    floor_report_ = cal::FloorReport{};
+  }
   // The first cell does not open until 200 ms from now (pump_power_verify
   // / pump_capacity check this): the ack needs a chance to reach the GS
   // first.
@@ -296,6 +329,8 @@ void CalSweep::pump(uint64_t now_ms, RadioTx& tx, PowerCtl& pwr, CapacityCtl& ca
     case State::Sweeping:
       if (current_kind_ == cal::Kind::Capacity) {
         pump_capacity(now_ms, cap);
+      } else if (current_kind_ == cal::Kind::Floor) {
+        pump_floor(now_ms, cap);
       } else {
         pump_power_verify(now_ms, tx, pwr);
       }
@@ -386,9 +421,91 @@ void CalSweep::pump_capacity(uint64_t now_ms, CapacityCtl& cap) {
   cell_entered_ = false;
 }
 
+void CalSweep::pump_floor(uint64_t now_ms, CapacityCtl& cap) {
+  // Same start delay as Power/Verify -- see pump_power_verify().
+  if (now_ms < sweep_start_ms_) return;
+  const auto value = [&]() -> uint8_t {
+    return floor_phase_ == FloorPhase::Ref ? cal::kFloorRef : floor_cands_[floor_i_];
+  };
+  if (!cell_entered_) {
+    if (floor_phase_ == FloorPhase::Done) {
+      // The run goes on at the configured floor until the GS's apply (if
+      // any value passed) puts the measured one up.
+      cap.restore_wide_floor();
+      finish_sweep(now_ms);
+      return;
+    }
+    // Ascending, so each point raises the floor over the last one tried --
+    // except after a stalled point, which the owner's blast may have freed
+    // by raising it; devourer parks IGI at a lowered floor, so the next
+    // candidate still starts from its own state.
+    cap.set_point(cal::kFloorMcs, current_bw_);
+    cap.set_wide_floor(value());
+    settle_deadline_ms_ = now_ms + settle_ms_;
+    cell_entered_ = true;
+    return;
+  }
+  if (now_ms < settle_deadline_ms_) return;
+
+  const uint32_t dwell = floor_phase_ == FloorPhase::Ref       ? cal::kFloorRefDwellMs
+                         : floor_phase_ == FloorPhase::Confirm ? cal::kFloorConfirmMs
+                                                               : dwell_ms_;
+  // idx is the candidate on the air (-1 = the reference point): the GS
+  // shows progress from it and judges nothing by what it hears.
+  const int8_t idx =
+      floor_phase_ == FloorPhase::Ref ? int8_t{-1} : static_cast<int8_t>(floor_i_);
+  const auto payload =
+      cal::build_cal_payload(cal::Kind::Floor, cal::kFloorMcs, idx, current_bw_,
+                             stamp_flags(), /*seq=*/0, cfg_.capacity_frame_len);
+  // Blocks for the dwell by design -- see the class comment.
+  const BlastResult r = cap.blast(payload.data(), payload.size(), dwell);
+  offered_[cal::kFloorMcs] += r.offered;
+  cell_entered_ = false;
+  const uint32_t worst = cal::floor_min_second(r.per_second);
+  switch (floor_phase_) {
+    case FloorPhase::Ref:
+      floor_report_.ref_fps = cal::floor_ref_rate(r.per_second);
+      // Nothing to compare a candidate against: the sweep has no answer.
+      floor_phase_ = floor_report_.ref_fps ? FloorPhase::Cand : FloorPhase::Done;
+      return;
+    case FloorPhase::Cand:
+      floor_report_.min_fps[floor_i_] = static_cast<uint16_t>(std::min<uint32_t>(worst, 0xFFFF));
+      floor_report_.tried = static_cast<uint8_t>(floor_i_ + 1);
+      if (cal::floor_seconds_pass(r.per_second, floor_report_.ref_fps)) {
+        floor_phase_ = FloorPhase::Confirm;
+        return;
+      }
+      break;
+    case FloorPhase::Confirm:
+      floor_report_.confirm_pct = static_cast<uint8_t>(std::min<uint64_t>(
+          100, static_cast<uint64_t>(worst) * 100 / floor_report_.ref_fps));
+      if (cal::floor_seconds_pass(r.per_second, floor_report_.ref_fps)) {
+        floor_report_.floor = floor_cands_[floor_i_];
+        floor_phase_ = FloorPhase::Done;
+        return;
+      }
+      // Passed its dwell, failed the longer one: marginal. Go on upward,
+      // a bounded number of times.
+      if (++floor_confirms_ >= cal::kFloorMaxConfirms) {
+        floor_phase_ = FloorPhase::Done;
+        return;
+      }
+      floor_phase_ = FloorPhase::Cand;
+      break;
+    case FloorPhase::Done:
+      return;
+  }
+  if (++floor_i_ >= floor_cands_.size()) floor_phase_ = FloorPhase::Done;
+}
+
 void CalSweep::finish_sweep(uint64_t now_ms) {
   // Verify emits no SweepDone -- the GS times its own verify window.
-  if (current_kind_ != cal::Kind::Verify) {
+  if (current_kind_ == cal::Kind::Floor) {
+    pending_done_ = cal::pack_floor_done(nonce_, static_cast<uint8_t>(last_started_seq_),
+                                         floor_report_);
+    repeat_done_ = pending_done_;
+    next_done_ms_ = now_ms + kDoneFirstRepeatMs;
+  } else if (current_kind_ != cal::Kind::Verify) {
     pending_done_ = cal::SweepDone{nonce_, static_cast<uint8_t>(last_started_seq_), offered_,
                                    blocked_pct_};
     repeat_done_ = pending_done_;

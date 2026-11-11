@@ -1,15 +1,18 @@
-# TX-power walls and air capacity — `maburcal`
+# TX-power walls, air capacity and the wide-TX floor — `maburcal`
 
 An operator ssh'd into the ground station measures, per channel width the
-link flies, two per-unit hardware facts of their own vtx and writes them
-into the drone's config:
+link flies, per-unit hardware facts of their own vtx and writes them into
+the drone's config:
 
 - the **walls**: the TXAGC index at which each MCS's PA starts to
   compress (`radio.rate_walls_rel_20` / `_40`), and
 - the **efficiency**: the share of the nominal PHY rate the air really
   delivers at each MCS (`air_clock.efficiency_20` / `_40`), which the
   drone's bitrate formula and air clock price against
-  (`docs/airtime-model.md` §7).
+  (`docs/airtime-model.md` §7), and
+- the **wide-TX floor**: the lowest receive-gain floor at which the
+  drone's radio keeps sending at 40 MHz on a quiet channel
+  (`radio.wide_tx_igi_floor`, plus a margin; "The floor sweep" below).
 
 Both are measured on this drone and this GS, under the coding flags the
 link flies (`radio.ldpc`, STBC on), at the drone's production frame size
@@ -40,16 +43,17 @@ the transfer curve, channel-to-channel repeatability:
 logged into the GS to start a run.
 
 **What a run measures.** A run is a list of sweeps, each a kind (`power`
-or `cap`) at a width (20 or 40). `maburcal start` with no arguments runs
+or `cap`) at a width (20 or 40), plus the 40 MHz-only `floor`. `maburcal start` with no arguments runs
 the GS's own composition (`default_sweeps`, `gs/src/cal_control.h`):
 `power20, cap20`, plus `power40, cap40` when the GS receiver width
 (derived from the ladder, `docs/bw40.md`) is 40
 **and** some `[[link.ladder]]` rung has `bw = 40`. The width is the
 narrower of the GS receiver width and the linked drone's DISC_ACK
 `agreed_width`, so a 40 MHz GS linked to a drone flying 20 composes the
-20 MHz pair only. Arguments `power20|power40|cap20|cap40` pick a subset;
-duplicates drop. Whatever was typed, the session runs widths ascending and,
-within a width, **power before capacity**: capacity is measured at the
+20 MHz pair only. Arguments `power20|power40|cap20|cap40|floor` pick a
+subset; duplicates drop. Whatever was typed, the session runs widths
+ascending and, within a width, **floor, then power, then capacity**: the
+40 MHz sweeps fly at the floor just found, and capacity is measured at the
 power the walls just parked. The reply names the run as it will go:
 `ok started power20,cap20,power40,cap40`.
 
@@ -57,11 +61,20 @@ Refusals come back at once, before anything airs:
 
 | reply | why |
 |---|---|
-| `err bad token: <tok>` | not one of the four tokens |
+| `err bad token: <tok>` | not one of the five tokens |
 | `err refused: GS receiver width is 20 (load a 40 MHz ladder to calibrate 40 MHz)` | a `*40` token while the effective width (above) is 20 |
 | `err a calibration session is already running` | a run, or its channel pick, is in progress |
 | `err refused: link is down` | `maburgs` is not in `SESSION` |
 | `err refused: peer does not advertise CAP_CALIBRATE` | the drone's DISC_ACK lacks the bit (a build without the mabur-dialect calibration) |
+| `err refused: peer does not support the floor sweep` | `floor` was the only sweep asked for and the drone's DISC_ACK lacks `CAP_CAL_WIDE` |
+
+A drone without `CAP_CAL_WIDE` (`common/include/mabur/rc_proto.h`) is
+never sent the floor sweep: its decoder takes any kind byte, and kind 4
+would run as a power sweep. With other sweeps in the run the floor is
+dropped from it, the run goes on, and the floor result reads `peer does
+not support the floor sweep`. A capability bit rather than an `RC_VERSION`
+bump: nothing else on the wire changed, and a pair split across the
+change still links and still calibrates what both ends know.
 
 The "GS receiver width is 20" wording is also what a 40 MHz GS says when it
 is the linked drone that flies 20.
@@ -75,9 +88,9 @@ ok state=sweep sweep=2/4 kind=capacity bw=20 cell=3/8
 
 `state` is one of `idle picking await_ack sweep await_done analyze apply
 verify done failed`; `sweep=k/n` the running sweep, 1-based; `kind` is
-`verify` during a verify pass; `cell=i/n` the cell of the latest frame the
-GS tallied (840 power cells per sweep, 8 capacity points, up to 8 verify
-cells). `mismatch=<n>` appears once frames have been dropped for a kind,
+`verify` during a verify pass and `floor` during the floor sweep;
+`cell=i/n` the cell of the latest frame the GS tallied (840 power cells per
+sweep, 8 capacity points, up to 8 verify cells, 12 floor candidates). `mismatch=<n>` appears once frames have been dropped for a kind,
 width or flags that do not match the running sweep (see "The sweep
 frame"). A `failed` line ends with `fail_reason=<why>` (free text to the
 end of the line). Then `start` finds the run's `cal.log` and prints the
@@ -150,7 +163,9 @@ store follows a calibration relocate like any hop.
    (`anchor_unreadable`: the chip cannot report its TXAGC reference, or
    would not zero its rate diffs so the reference can be read clean —
    checked again before every later power sweep of the run, which a
-   failure closes) fails the run.
+   failure closes) fails the run. `unsupported` on a floor sweep (the
+   drone's radio has no runtime floor: not a Jaguar3 card) skips it and
+   the run goes on; the drone touched nothing.
 3. **Silence.** From the ack the GS sends nothing — no RCF, no DISC
    keepalive, no live MAVLink — for the sweep's planned duration plus
    `phase_slack_ms` (1 s) (`CalSession::radio_silent()`).
@@ -161,7 +176,8 @@ store follows a calibration relocate like any hop.
    silence early; duplicates are ignored. Without any copy the GS's window
    closes at planned end + 1 s.
 5. **Analyse.** Power: one wall per rate (below). Capacity: one
-   efficiency per rate (below).
+   efficiency per rate (below). Floor: the drone's own verdict plus the
+   margin (below).
 6. **Apply.** `MABUR_CAL_APPLY{nonce, seq, bw, has, walls[8], legacy,
    eff[8]}` every 200 ms until `MABUR_CAL_APPLIED{nonce, seq, bw, ok,
    reason}`; 5 s without an answer fails the run (`calibration apply
@@ -281,7 +297,55 @@ price delivered capacity, and the bench numbers the bundle carried were
 defined as exactly this ratio, so a measured table replaces them like for
 like.
 
-### 5. The end of a run
+### 5. The floor sweep
+
+A Jaguar3 card (RTL8822E, RTL8812CU) tuned to 40 MHz on a quiet channel
+can park its receiver where the secondary 20 MHz never reads idle, and its
+MAC then holds every 40 MHz frame: the TX path stalls. devourer's floor on
+the receive gain (`IRadio::SetWideTxIgiFloor`) prevents it, and which value
+is enough differs per unit (`docs/findings/2026-11-11-wide-tx-floor.md`):
+every step costs the drone about 1 dB of uplink sensitivity while 40 MHz
+flies, so the run measures the lowest value that works rather than ship
+one that clears every card.
+
+The drone runs it alone (`CalSweep::pump_floor`, rules in
+`common/include/mabur/cal_floor.h`), at 40 MHz, with the GS silent (frames
+the drone hears re-run its gain control and hide the stall):
+
+1. **Reference.** Floor `0x7f`, the receiver as deaf as the field allows,
+   so the channel always reads idle: HT MCS 2, production-sized frames
+   back to back through the video path for 2 s. The median second is the
+   reference rate (about 2500 frames/s).
+2. **Candidates.** `0x20, 0x22, … 0x36` ascending (12, two IGI steps
+   apart), each 300 ms settle then a 4 s dwell. The drone counts what its
+   TX path sends in each whole second. A value **passes** when no second
+   falls below 95 % of the reference.
+3. **Confirmation.** The first value that passes dwells again for 8 s; a
+   value that held 4 s and slips later (one RTL8822E at `0x22`: worst
+   second 2130 of a 2484 median) fails here and the walk goes on upward.
+   After two failed confirmations it stops with nothing found.
+4. **Report.** The SweepDone carries the reference rate, the confirmed
+   value (0 = none), each candidate's worst second and the confirmation's
+   worst second in percent; the drone puts its flown floor back.
+
+The GS writes **the confirmed value plus 4 steps**, clamped to `0x7f`
+(`floor_with_margin`): an apply of its own (`has` bit 2, the value in the
+`legacy` byte), patched into `radio.wide_tx_igi_floor` and applied live,
+so the rest of the run flies it. No value passing, a reference that sent
+nothing, or a lost SweepDone write nothing; the floor result says which.
+
+A candidate below the unit's edge holds the TX path, and `maburd`'s data
+sends wait on the chip without a timeout (`no_cancel_multipkt`). The
+blast therefore runs a watchdog: a send still pending 1 s past the dwell
+gets the floor raised to `0x7f`, the held frames air and the point fails
+(its stalled seconds read 0). The run's end puts the floor from the file
+back.
+
+The longest walk is 15 points of settle plus 2 + 12 × 4 + 2 × 8 s of
+dwell, 70.5 s; a unit whose edge is `0x24` behind a marginal `0x22` takes
+about 32 s.
+
+### 6. The end of a run
 
 After the last sweep the session is `done`, and the GS sends
 `MABUR_CAL_ABORT` three times, 200 ms apart: the drone closes the run at
@@ -306,6 +370,8 @@ and resume video on its own.
 | apply + verify | ~1.5 s per power sweep (8 × 25 ms of verify air, 200 ms start, 1 s listen tail) |
 | capacity sweep | 18.4 s per width (8 × 2.3 s) + 200 ms start + ack |
 | apply (capacity) | one round trip |
+| floor sweep | ~32 s for an edge at `0x24` with a marginal `0x22`; 70.5 s at most |
+| apply (floor) | one round trip |
 
 The host loopback test (`test_cal_e2e`) reaches `done` for four sweeps at
 82 s simulated and for `power20` alone at 22 s. The target is a full run
@@ -359,12 +425,14 @@ outside `running()`.
 `common/include/mabur/cal_wire.h`, a 12-byte header:
 
 ```
-magic "MCAL" | u8 kind (1 power, 2 verify, 3 capacity) | u8 rate | i8 idx |
+magic "MCAL" | u8 kind (1 power, 2 verify, 3 capacity, 4 floor) | u8 rate | i8 idx |
 u8 bw (20/40) | u8 flags (bit0 ldpc, bit1 stbc) | u8 seq_hi | u16 seq (LE)
 ```
 
 then fill `(0x5A ^ idx)` to the frame length (64 B for power and verify,
-the video body size for capacity). `seq` is a 24-bit running frame
+the video body size for capacity and floor). A floor frame's `idx` is the
+candidate on the air (−1 = the reference point): the GS shows progress
+from it and judges nothing by what it hears. `seq` is a 24-bit running frame
 counter. `idx` is signed and relative to the chip's anchor. The parser
 refuses an unknown kind, a rate over 7, an index outside [−64, 63], a
 width other than 20/40, unknown flag bits, or a fill that does not match
@@ -462,6 +530,7 @@ Per apply, line-surgical in `/etc/mabur.toml` (`drone/src/cal_apply.h`):
 |---|---|
 | power at `<bw>` | `radio.rate_walls_rel_<bw>`, `radio.cal_flags_<bw>` (the sweep's stamp flags), `radio.legacy_wall_rel` (20 MHz, or 40 MHz with no 20 MHz table), `radio.power_mode = "offset"` |
 | capacity at `<bw>` | `air_clock.efficiency_<bw>` |
+| floor | `radio.wide_tx_igi_floor` (inserted after `power_mode` when the file has none) |
 
 An undetermined wall (`-128` on the wire) and a capacity point sent as 0
 (`tx_bound` or `lost`) leave that entry as it is. A key the file lacks — a first
@@ -488,7 +557,7 @@ An inserted line has no entry of its own for a left rate to keep:
 
 Before anything is written the candidate is validated with the loader's
 own rules (every wall in [−64, 63], `wall − round(wall_margin_db · 4) ≥
-−64`, every efficiency in [0.05, 1.0]), patched, written to
+−64`, every efficiency in [0.05, 1.0], a floor in [1, 127]), patched, written to
 `<path>.new`, fsynced and loaded with `mabur::load_config` — the function
 `maburd` boots with — and only then published by an atomic rename, under
 the config-write lock shared with the MAVLink parameter component (a
@@ -706,7 +775,7 @@ lines above, and `cal_latch_drop=` on `maburd tx_send:`.
 **Sideport** `link.cal{state, sweep, kind, bw, cell}` while a run owns the
 air (`await_ack` through `verify`; absent while picking and after the
 end): `sweep` and `cell` are `"k/n"` strings as on the status line, `kind`
-`power|capacity|verify`. maburtop shows `CAL <kind><bw> <i>/<n>` (e.g.
+`power|capacity|verify|floor`. maburtop shows `CAL <kind><bw> <i>/<n>` (e.g.
 `CAL power40 312/840`) on its top bar and in the compact header
 (`docs/observability.md`).
 
@@ -719,22 +788,26 @@ debug logging on it goes in the session directory
 `<debug_log.dir>/cal/cal.log`, i.e. `/media/dvr/log/cal/cal.log`. The
 start line names the resolved path, and `maburcal start` finds it there.
 
-Format `callog 5` (`gs/src/cal_log.h`; `gs/bundle/maburcal` is the
+Format `callog 6` (`gs/src/cal_log.h`; `gs/bundle/maburcal` is the
 in-repo reader and changes with it):
 
 ```
-callog 5                                              # once per file
+callog 6                                              # once per file
 R <nonce> <margin_db> <ch> <auto|pinned|onecard|stayed> <ldpc 0|1>   # once per run
-S <seq> <power|capacity> <bw> <frames_per_cell|dwell_ms>             # once per sweep
+S <seq> <power|capacity|floor> <bw> <frames_per_cell|dwell_ms>       # once per sweep
 C <rate> <idx> <expected> <recv0> <recv1> <corrupt> <rssi0> <rssi1>  # power cells
 W <rate> <wall> <floor> <best_card> <flags>                          # per rate, power
 P <rate> <offered> <recv_best> <air_bits_best> <eff_x1000> <blocked_pct> <flags> <span_ms>  # per rate, capacity
 A <bw> <0|1> <reason to end of line>                                 # per apply
 V <rate> <idx> <pct>                                                 # per verify cell
+F <floor> <min_fps>                                                  # per floor candidate tried
+L <ref_fps> <found> <confirm_pct> <written>                          # per floor sweep
 ```
 
 `S` scopes the rows after it to its width until the next `S`; a verify
 pass writes no `S` of its own (its `V` rows follow that sweep's `A`). The
+`F` and `L` follow a floor sweep's `S` (values decimal; `found` and
+`written` 0 = none). The
 `R` line is written at the run's first ack, so a run that failed before
 any ack has none; `ldpc` is the drone's announced stamp flag (the GS has
 no LDPC setting of its own). Every index is signed and relative to the
@@ -753,7 +826,8 @@ clean": `pct` 0 is a real measurement.
 One file holds several runs (a retry after moving the drone lands in the
 same file), each delimited by its own `R`. A file in an older format is
 renamed `cal.log.callog<N>` when `maburgs` starts, so one file never
-mixes formats. `maburcal report` reads `callog 1`-`5`: 1 and 2
+mixes formats. `maburcal report` reads `callog 1`-`6`: 6 is 5 plus the
+floor sweep's `F`/`L` rows; 1 and 2
 carry absolute indices and a `base_ref` on `R` (`-1` = undetermined), 3 is
 the single-width relative format, 4 is 5 without `P`'s `span_ms`, its
 `eff` divided by the commanded dwell and so reading high
@@ -791,6 +865,7 @@ findings page.
 | abort | `maburcal abort` mid-sweep | video back within 2 s; nothing written |
 | re-link | after every run | `SESSION` again within a couple of beacons, IDR at the join |
 | dirty op | start with a jammer or busy air on op | `H relocate … cal` in `scan.log`; the run on the quiet member |
+| floor | `maburcal start floor` on a 40 MHz pair, drone on a quiet channel | `done`; `floor40: 0x.. passed` with a value at or under the unit's known edge, written + 4 steps; `/etc/mabur.toml` gains or rewrites `wide_tx_igi_floor` only |
 | tunnel lane | the drone's `stats:`/`tx_send:` lines and the sideport during a run | `mav … reject=` flat (`cal_late=` may rise by ~2 at the end of a run), `drone.auth_reject` false, `link.mav.reject` flat, `cal_latch_drop=0` |
 | parameter set during a run | `mavparam.py set ENC_BITRATE_MAX …` mid-run | `FAILED`, "calibration in progress" |
 

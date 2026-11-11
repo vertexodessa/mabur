@@ -84,6 +84,15 @@ TEST(start_power40_on_a_20_gs_is_refused_with_nothing_started) {
   CHECK(s.state() == CalSession::State::Idle);
 }
 
+TEST(the_floor_token_names_the_40_mhz_floor_sweep) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string reply;
+  CHECK(CalControl::apply("start power40 floor", s, &reply, kDefault20, /*rx_width=*/40));
+  CHECK(reply == "ok started floor,power40");
+}
+
 TEST(bad_token_is_an_error) {
   CalSession s(CalSessionCfg{});
   s.set_peer(true, true);

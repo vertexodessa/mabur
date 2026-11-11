@@ -1,5 +1,6 @@
 #include <cstring>
 
+#include "mabur/cal_floor.h"
 #include "mabur/cal_mav.h"
 #include "mtest.h"
 
@@ -160,6 +161,55 @@ TEST(every_message_round_trips) {
     REQUIRE(got != nullptr);
     CHECK(got->nonce == a.nonce);
   }
+}
+
+TEST(a_floor_apply_and_a_floor_sweep_round_trip) {
+  ApplyCmd a;
+  a.nonce = 0x55;
+  a.seq = 2;
+  a.bw = 40;
+  a.has_floor = true;
+  a.floor = 0x7f;  // the top of the field still fits the int8 legacy slot
+  auto out = parse_one(encode(CalMsg{a}, kSysId, kCompId, kChanGsLocal));
+  REQUIRE(out.has_value());
+  auto decoded = decode(*out);
+  REQUIRE(decoded.has_value());
+  auto* got = std::get_if<ApplyCmd>(&*decoded);
+  REQUIRE(got != nullptr);
+  CHECK(got->has_floor);
+  CHECK(got->floor == 0x7f);
+  CHECK(!got->has_walls && !got->has_eff);
+  CHECK(got->legacy == kWallLeave);
+
+  const SweepCmd c = make_floor_sweep(0x66, 1);
+  auto out2 = parse_one(encode(CalMsg{c}, kSysId, kCompId, kChanGsLocal));
+  REQUIRE(out2.has_value());
+  auto d2 = decode(*out2);
+  REQUIRE(d2.has_value());
+  auto* sc = std::get_if<SweepCmd>(&*d2);
+  REQUIRE(sc != nullptr);
+  CHECK(sc->kind == Kind::Floor);
+  CHECK(sc->idx_lo == c.idx_lo && sc->idx_hi == c.idx_hi && sc->dwell_ms == c.dwell_ms);
+
+  FloorReport r;
+  r.ref_fps = 2800;
+  r.floor = 0x24;
+  r.tried = 12;
+  r.confirm_pct = 97;
+  for (size_t i = 0; i < r.min_fps.size(); ++i) r.min_fps[i] = static_cast<uint16_t>(100 * i + 7);
+  r.min_fps[11] = 0xFFFF;
+  auto out3 = parse_one(encode(CalMsg{pack_floor_done(0x66, 1, r)}, kSysId, kCompId, kChanGsLocal));
+  REQUIRE(out3.has_value());
+  auto d3 = decode(*out3);
+  REQUIRE(d3.has_value());
+  auto* sd = std::get_if<SweepDone>(&*d3);
+  REQUIRE(sd != nullptr);
+  const FloorReport back = unpack_floor_done(*sd);
+  CHECK(back.ref_fps == 2800);
+  CHECK(back.floor == 0x24);
+  CHECK(back.tried == 12);
+  CHECK(back.confirm_pct == 97);
+  CHECK(back.min_fps == r.min_fps);
 }
 
 TEST(applied_reason_is_cut_at_49) {
