@@ -116,9 +116,10 @@ TEST(dropped_unit_is_residual_loss) {
 
 // The same scaffold as dropped_unit_is_residual_loss, but the withheld body
 // arrives later as a retransmit: the video is whole (the retx fills the
-// content), yet the ladder must still see the loss -- a NACK retransmit fixes
-// the video only.
-TEST(retx_filled_symbol_is_still_residual_loss) {
+// content). The stats still book the missing direct copy as loss; the
+// ladder's demote input does not, or every retransmit that beats the FEC
+// repairs would cost a rung.
+TEST(retx_filled_symbol_is_loss_in_the_stats_and_not_for_the_ladder) {
   auto layers = one_symbol_layers();
   UepEncoder enc(layers, /*flush_ms=*/15);
   UepDecoder dec(layers);
@@ -148,6 +149,9 @@ TEST(retx_filled_symbol_is_still_residual_loss) {
   const auto rc = maburgs::residual_counts(dec, 0, /*cur=*/false);
   CHECK(rc.expected > rc.arrived);      // the retx-filled seq counts as not arrived
   CHECK(dec.stats(0).syms_retx >= 1);
+  const auto lr = maburgs::ladder_residual_counts(dec);
+  CHECK(lr.expected > 0);
+  CHECK(lr.expected == lr.arrived);     // ...and as arrived for the ladder
 }
 
 // The pooled observability view is exactly the two layers summed -- the

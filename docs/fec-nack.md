@@ -12,9 +12,11 @@ the sliding-window decoder could not recover, inside the time the GS
 already waits before it truncates a frame. FEC overhead, the rung table and
 the two-card receive diversity are untouched: the NACK only removes the
 truncations and base smears that happen while the ladder is still deciding.
-It is **option A, repair only**: a symbol a retransmit filled still counts
-as loss for every ladder input, so the ladder demotes exactly as it would
-without the NACK. Base layer only; the wire carries a `sid` byte so enh can
+It is **repair only**. A symbol a retransmit filled is loss in the stats
+and in the ladder's pre-FEC util, but not in the ladder's residual input:
+the resends race the frame's own FEC repairs, and the ones that land first
+fill symbols the repairs would have solved anyway
+(`docs/findings/2026-11-11-nack-residual.md`). Base layer only; the wire carries a `sid` byte so enh can
 follow, but the drone refuses any `sid != 0` today.
 
 **Scope: `maburgs` and the web GS in GS mode.** The
@@ -255,10 +257,12 @@ burst_ms = 20   # bucket depth, ms of air at the current op; 1..200
   tracker (`filled`, not `wasted`) and count in the episode's `retx`
   (`SwDecoder::ingest`): without the retx the row could not have yielded
   them.
-- **Residual inputs** use `abandoned + syms_retx` on both paths
-  (`gs/src/ladder_residual.cpp`, the s3 path in `gs/src/link_health.cpp`).
-  A retx-filled symbol counts as loss even if its direct copy arrives
-  later, symmetric with `recovered`.
+- **Residual.** The stats' residual (`residual_counts` in
+  `gs/src/ladder_residual.cpp`) is `abandoned + syms_retx`: a retx-filled
+  symbol counts as loss even if its direct copy arrives later. The ladder's
+  inputs (`ladder_residual_counts`, the s3 path in
+  `gs/src/link_health.cpp`) use `abandoned` alone and count a retx-filled
+  symbol as arrived.
 - **Latency anchor.** When fragment 0 of an AU arrived in a retx body
   (`hdr_retx`), the enc/q anchor sample is withheld: its stamps describe
   the original send, a NACK round trip earlier.
