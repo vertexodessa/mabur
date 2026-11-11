@@ -1452,6 +1452,24 @@ TEST(radio_ldpc_defaults_on_and_parses_off) {
   CHECK(c.radio.ldpc == false);
 }
 
+TEST(radio_wide_tx_igi_floor_defaults_to_the_safe_value_and_parses) {
+  auto e = write_temp_toml("");
+  Config def = load_config(e.string());
+  std::filesystem::remove(e);
+  CHECK(def.radio.wide_tx_igi_floor == 0x35);
+  auto p = write_temp_toml("[radio]\nwide_tx_igi_floor = 40\n");
+  Config c = load_config(p.string());
+  std::filesystem::remove(p);
+  CHECK(c.radio.wide_tx_igi_floor == 40);
+  auto off = write_temp_toml("[radio]\nwide_tx_igi_floor = 0\n");
+  CHECK(load_config(off.string()).radio.wide_tx_igi_floor == 0);
+  std::filesystem::remove(off);
+  auto bad = write_temp_toml("[radio]\nwide_tx_igi_floor = 128\n");
+  std::string msg = what_of([&] { (void)load_config(bad.string()); });
+  CHECK(msg.find("radio.wide_tx_igi_floor") != std::string::npos);
+  std::filesystem::remove(bad);
+}
+
 TEST(radio_channels_default_and_parse) {
   Config def = load_config(write_temp_toml("[venc]\nsensor_bin = \"x\"\n").string());
   REQUIRE(def.radio.channels.size() == 4);
