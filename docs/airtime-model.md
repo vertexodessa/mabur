@@ -220,7 +220,7 @@ their variance into jitter. Knobs, in order of proven usefulness:
   silently revert another. The encoder loop prints `rc_readback t+10s: …
   OK|MISMATCH` so the log proves what the encoder holds, not just what was
   written.
-- **`venc.min_iqp`** (config, 0=leave firmware 12, bundle **34**; also
+- **`venc.min_iqp`** (config, 0=leave firmware 12, bundle **42**; also
   volatile via `:8301 POST /venc/set?min_iqp=N`, 1..51, with `max_iqp=N`
   beside it) programs `u32MinIQp`, the I-frame QP floor — **the one
   direct IDR SIZE bound star6e honours.** Raising it shrinks IDRs steeply
