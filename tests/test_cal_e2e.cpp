@@ -1128,7 +1128,7 @@ TEST(a_lossy_link_still_completes) {
 
 // ---- the floor sweep --------------------------------------------------------
 
-TEST(a_floor_sweep_writes_the_edge_plus_margin_past_a_marginal_value) {
+TEST(a_floor_sweep_finds_the_edge_past_a_marginal_value_and_keeps_the_default) {
   Kit k("floor");
   k.cap.floor_edge = 0x24;
   k.cap.marginal = 0x22;
@@ -1138,18 +1138,19 @@ TEST(a_floor_sweep_writes_the_edge_plus_margin_past_a_marginal_value) {
   if (verbose()) std::printf("  floor + power40: Done at %.1f s\n", k.t / 1000.0);
   const auto snap = k.gs.snapshot();
   CHECK(snap.floor.rep.floor == 0x24);
-  CHECK(snap.floor.written == 0x28);
+  // 0x24 + 4 is under the default: the default is what goes in the file.
+  CHECK(snap.floor.written == 0x35);
   CHECK(snap.floor.applied);
   // The power40 sweep that followed flew at the floor just written.
-  CHECK(k.cap.live_floor == 0x28);
+  CHECK(k.cap.live_floor == 0x35);
   CHECK(!k.gs_talked_while_silent);
   k.drain();
-  CHECK(k.loaded().radio.wide_tx_igi_floor == 0x28);
+  CHECK(k.loaded().radio.wide_tx_igi_floor == 0x35);
   CHECK(k.read().find("# a comment that must survive") != std::string::npos);
   // One backup for the run, the file as it was before the floor.
   CHECK(read_file(k.file.path + ".pre-cal") == std::string(kFixture));
   // The run's end puts the written floor up, not the boot one.
-  CHECK(k.cap.live_floor == 0x28);
+  CHECK(k.cap.live_floor == 0x35);
 }
 
 TEST(a_unit_with_no_passing_floor_keeps_its_config) {

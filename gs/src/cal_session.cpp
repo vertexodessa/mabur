@@ -664,8 +664,10 @@ bool CalSession::analyze_floor() {
     floor_.note = "the reference point sent nothing";
   else if (floor_.rep.floor == 0)
     floor_.note = "no floor passed";
-  else
-    floor_.written = cal::floor_with_margin(floor_.rep.floor);
+  else {
+    floor_.below_range = !floor_.cands.empty() && floor_.rep.floor == floor_.cands.front();
+    floor_.written = cal::floor_to_write(floor_.rep.floor);
+  }
   if (log_) log_->floor(floor_.rep, floor_.cands, floor_.written);
   if (floor_.written == 0) return false;
   apply_.has_floor = true;

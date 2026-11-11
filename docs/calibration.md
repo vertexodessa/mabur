@@ -12,7 +12,8 @@ the drone's config:
   (`docs/airtime-model.md` §7), and
 - the **wide-TX floor**: the lowest receive-gain floor at which the
   drone's radio keeps sending at 40 MHz on a quiet channel
-  (`radio.wide_tx_igi_floor`, plus a margin; "The floor sweep" below).
+  (its edge; `radio.wide_tx_igi_floor` is raised for a unit that needs
+  more than the default and never lowered; "The floor sweep" below).
 
 Both are measured on this drone and this GS, under the coding flags the
 link flies (`radio.ldpc`, STBC on), at the drone's production frame size
@@ -304,9 +305,7 @@ can park its receiver where the secondary 20 MHz never reads idle, and its
 MAC then holds every 40 MHz frame: the TX path stalls. devourer's floor on
 the receive gain (`IRadio::SetWideTxIgiFloor`) prevents it, and which value
 is enough differs per unit (`docs/findings/2026-11-11-wide-tx-floor.md`):
-every step costs the drone about 1 dB of uplink sensitivity while 40 MHz
-flies, so the run measures the lowest value that works rather than ship
-one that clears every card.
+the run measures each unit's edge, the lowest value that works.
 
 The drone runs it alone (`CalSweep::pump_floor`, rules in
 `common/include/mabur/cal_floor.h`), at 40 MHz, with the GS silent (frames
@@ -328,11 +327,20 @@ the drone hears re-run its gain control and hide the stall):
    value (0 = none), each candidate's worst second and the confirmation's
    worst second in percent; the drone puts its flown floor back.
 
-The GS writes **the confirmed value plus 4 steps**, clamped to `0x7f`
-(`floor_with_margin`): an apply of its own (`has` bit 2, the value in the
-`legacy` byte), patched into `radio.wide_tx_igi_floor` and applied live,
-so the rest of the run flies it. No value passing, a reference that sent
-nothing, or a lost SweepDone write nothing; the floor result says which.
+The confirmed value is the unit's **floor edge**, reported as a
+measurement of its own (`maburcal`: `floor edge 0x24`; `floor edge none
+found at or above 0x20` when the lowest candidate passed, a unit that
+never stalled). The GS writes **the edge plus 4 steps, never under the
+default `0x35`**, clamped to `0x7f` (`floor_to_write`): calibration
+raises the floor for a unit that needs more and otherwise leaves the
+default. A lower floor buys uplink sensitivity in theory (about 1 dB per
+step while 40 MHz flies) but on one RTL8822E (edge `0x24`) the drone took
+62-73 % of the GS's RCFs at `0x28` against 93-98 % at `0x35`, with the
+same video; what it buys at long range is unmeasured. The write is an
+apply of its own (`has` bit 2, the value in the `legacy` byte), patched
+into `radio.wide_tx_igi_floor` and applied live, so the rest of the run
+flies it. No value passing, a reference that sent nothing, or a lost
+SweepDone write nothing; the floor result says which.
 
 A candidate below the unit's edge holds the TX path, and `maburd`'s data
 sends wait on the chip without a timeout (`no_cancel_multipkt`). The
@@ -865,7 +873,7 @@ findings page.
 | abort | `maburcal abort` mid-sweep | video back within 2 s; nothing written |
 | re-link | after every run | `SESSION` again within a couple of beacons, IDR at the join |
 | dirty op | start with a jammer or busy air on op | `H relocate … cal` in `scan.log`; the run on the quiet member |
-| floor | `maburcal start floor` on a 40 MHz pair, drone on a quiet channel | `done`; `floor40: 0x.. passed` with a value at or under the unit's known edge, written + 4 steps; `/etc/mabur.toml` gains or rewrites `wide_tx_igi_floor` only |
+| floor | `maburcal start floor` on a 40 MHz pair, drone on a quiet channel | `done`; `floor40: floor edge 0x..` at or under the unit's known edge, written as the larger of edge + 4 steps and `0x35`; `/etc/mabur.toml` gains or rewrites `wide_tx_igi_floor` only |
 | tunnel lane | the drone's `stats:`/`tx_send:` lines and the sideport during a run | `mav … reject=` flat (`cal_late=` may rise by ~2 at the end of a run), `drone.auth_reject` false, `link.mav.reject` flat, `cal_latch_drop=0` |
 | parameter set during a run | `mavparam.py set ENC_BITRATE_MAX …` mid-run | `FAILED`, "calibration in progress" |
 

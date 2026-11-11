@@ -148,16 +148,18 @@ floor), because which value clears is a property of the unit:
 - the 8822C the stall was found on needs `0x35`, the lowest value that has
   cleared every unit tested, which is why it is the default.
 
-`maburcal`'s floor sweep measures a unit's own value and writes it plus a
-4-step margin (`docs/calibration.md` "The floor sweep").
+`maburcal`'s floor sweep measures a unit's own edge and writes the edge
+plus a 4-step margin when that is above the default 0x35, the default
+otherwise (`docs/calibration.md` "The floor sweep").
 
 A unit without a floor that needs one does not lose the link outright
 under `maburd`: the uplink frames it hears move its gain off the parked
 value, so the video arrives with holds of tens of milliseconds (drone TX
 queue wait p90 20-170 ms, capture-to-complete p50 59 ms against 27 ms).
 Each step of the floor costs about 1 dB of uplink sensitivity while it is
-on, so a unit's own lowest clean value plus a margin of 2-4 steps is the
-number to keep; `linkbench-tx --wide-igi-floor N` finds it (saturated
+on by the driver's estimate, yet on one RTL8822E (edge 0x24) the drone
+took fewer of the GS's RCFs at 0x28 than at 0x35, so nothing ships under
+0x35; `linkbench-tx --wide-igi-floor N` finds a unit's edge (saturated
 40 MHz TX with the ground silent, one value at a time, pass = the full
 send rate with no stalled second). At bring-up `maburd` logs the value it
 runs.
