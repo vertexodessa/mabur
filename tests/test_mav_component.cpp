@@ -581,7 +581,7 @@ TEST(every_row_sets_reads_back_and_restores) {
       {"VENC_MIRROR", Value{Type::Bool, true}},
       {"VENC_FLIP", Value{Type::Bool, true}},
       {"RADIO_PWR_MODE", Value{Type::Str, false, 0, 0, "offset"}},
-      {"VENC_MIN_IQP", Value{Type::Int32, false, 42}},
+      {"VENC_MIN_IQP", Value{Type::Int32, false, 46}},
   };
   // One case per row but VENC_MODES, the read-only one (its own test below).
   static_assert(sizeof(cases) / sizeof(cases[0]) == cfgparam::kCount - 1, "one case per row");
