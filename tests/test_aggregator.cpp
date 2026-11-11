@@ -239,9 +239,56 @@ TEST(crc_failed_probe_body_is_delivered_for_salvage) {
   Aggregator agg(vec_layers(), 512, 2);
   int probes = 0;
   agg.set_probe_sink([&](uint8_t, const mabur::node::RxBody&) { ++probes; });
-  agg.on_rx_body(msg(0, 10, false, probe_body_fixture(5)));
-  CHECK(probes == 1);
+  agg.on_rx_body(msg(0, 10, true, probe_body_fixture(4)));
+  agg.on_rx_body(msg(0, 11, false, probe_body_fixture(5)));
+  CHECK(probes == 2);
   CHECK(agg.card(0).crc_fail == 1);
+}
+
+// The SBI stream byte has no CRC: an FCS-bad body is routed only to a
+// stream some card heard FCS-good within the last 500 ms, unless no SBI body
+// at all was FCS-good that long (a fade: salvage is all there is).
+TEST(crc_failed_body_needs_its_stream_heard_clean) {
+  Aggregator agg(vec_layers(), 512, 2);
+  std::vector<uint8_t> video;
+  for (auto& b : encode_fixture_bodies())
+    if (mabur::sbi_peek_stream_id(b.data(), b.size()) == 0) { video = b; break; }
+  REQUIRE(!video.empty());
+  int probes = 0;
+  agg.set_frag_sink([](const mabur::DecodedFrag&) {});
+  agg.set_probe_sink([&](uint8_t, const mabur::node::RxBody&) { ++probes; });
+  agg.on_rx_body(msg(0, 10, false, probe_body_fixture(1)));   // nothing clean yet
+  CHECK(probes == 1);
+  agg.on_rx_body(msg(1, 11, true, video));                    // video alive, probe not
+  agg.on_rx_body(msg(0, 12, false, probe_body_fixture(2)));
+  CHECK(probes == 1);
+  agg.on_rx_body(msg(1, 13, true, probe_body_fixture(3)));    // probe clean on card 1
+  agg.on_rx_body(msg(0, 14, false, probe_body_fixture(4)));   // routed on card 0 too
+  CHECK(probes == 3);
+  agg.on_rx_body(msg(0, 600, false, probe_body_fixture(5)));  // 586 ms of fade
+  CHECK(probes == 4);
+  agg.on_rx_body(msg(1, 700, true, video));                   // video back, probe stale
+  agg.on_rx_body(msg(0, 701, false, probe_body_fixture(6)));
+  CHECK(probes == 4);
+  CHECK(agg.card(0).crc_fail == 5);
+}
+
+// The base stream alone on the air: a flip to stream 1 has no clean stream
+// 1 to join. (With both video streams live a 0 <-> 1 flip still lands; the
+// header carries no CRC to tell.)
+TEST(stream_byte_flip_on_a_bad_fcs_body_goes_nowhere) {
+  auto bodies = encode_fixture_bodies();
+  Aggregator agg(vec_layers(), 512, 2);
+  int frags = 0;
+  agg.set_frag_sink([&](const mabur::DecodedFrag& f) { frags += f.stream_id != 0; });
+  uint16_t seq = 0;
+  for (auto b : bodies) {
+    if (mabur::sbi_peek_stream_id(b.data(), b.size()) != 0) continue;
+    const bool flip = seq % 5 == 4;
+    if (flip) b[3] ^= 1;
+    agg.on_rx_body(msg(0, seq++, !flip, b));
+  }
+  CHECK(frags == 0);
 }
 
 // The drone's chip numbers every injected frame from ONE hardware seq

@@ -143,6 +143,10 @@ class Aggregator {
   ProbeSink probe_sink_;
   uint16_t last_video_seq_ = 0;
   uint64_t last_video_us_ = 0;
+  // mono_us + 1 of the last FCS-good SBI body, per stream id and of any
+  // stream, on any card (0 = never): the routing gate for FCS-bad bodies.
+  std::array<uint64_t, 128> sid_clean_us_{};
+  uint64_t any_clean_us_ = 0;
   uint64_t bad_card_msgs_ = 0;
 };
 
