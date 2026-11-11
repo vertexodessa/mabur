@@ -45,25 +45,28 @@ logged into the GS to start a run.
 
 **What a run measures.** A run is a list of sweeps, each a kind (`power`
 or `cap`) at a width (20 or 40), plus the 40 MHz-only `floor`. `maburcal start` with no arguments runs
-the GS's own composition (`default_sweeps`, `gs/src/cal_control.h`):
-`power20, cap20`, plus `power40, cap40` when the GS receiver width
-(derived from the ladder, `docs/bw40.md`) is 40
-**and** some `[[link.ladder]]` rung has `bw = 40`. The width is the
-narrower of the GS receiver width and the linked drone's DISC_ACK
-`agreed_width`, so a 40 MHz GS linked to a drone flying 20 composes the
-20 MHz pair only. Arguments `power20|power40|cap20|cap40|floor` pick a
-subset; duplicates drop. Whatever was typed, the session runs widths
-ascending and, within a width, **floor, then power, then capacity**: the
-40 MHz sweeps fly at the floor just found, and capacity is measured at the
-power the walls just parked. The reply names the run as it will go:
-`ok started power20,cap20,power40,cap40`.
+the GS's own composition (`default_sweeps`, `gs/src/cal_control.h`). With
+a drone that advertises `CAP_CAL_WIDE` it is **both widths, whatever the
+link flies**: `power20, cap20, floor, power40, cap40` (below, "Both
+widths in one run"). With an older drone it is `power20, cap20`, plus
+`power40, cap40` when the GS receiver width (derived from the ladder,
+`docs/bw40.md`) is 40 **and** some `[[link.ladder]]` rung has `bw = 40`;
+that width is the narrower of the GS receiver width and the linked
+drone's DISC_ACK `agreed_width`, so a 40 MHz GS linked to an older drone
+flying 20 composes the 20 MHz pair only. Arguments
+`power20|power40|cap20|cap40|floor` pick a subset; duplicates drop.
+Whatever was typed, the session runs widths ascending and, within a
+width, **floor, then power, then capacity**: the 40 MHz sweeps fly at the
+floor just found, and capacity is measured at the power the walls just
+parked. The reply names the run as it will go:
+`ok started power20,cap20,floor,power40,cap40`.
 
 Refusals come back at once, before anything airs:
 
 | reply | why |
 |---|---|
 | `err bad token: <tok>` | not one of the five tokens |
-| `err refused: GS receiver width is 20 (load a 40 MHz ladder to calibrate 40 MHz)` | a `*40` token while the effective width (above) is 20 |
+| `err refused: GS receiver width is 20 (load a 40 MHz ladder to calibrate 40 MHz)` | a `*40` token while the effective width (above) is 20 and the drone lacks `CAP_CAL_WIDE` |
 | `err a calibration session is already running` | a run, or its channel pick, is in progress |
 | `err refused: link is down` | `maburgs` is not in `SESSION` |
 | `err refused: peer does not advertise CAP_CALIBRATE` | the drone's DISC_ACK lacks the bit (a build without the mabur-dialect calibration) |
@@ -78,7 +81,38 @@ bump: nothing else on the wire changed, and a pair split across the
 change still links and still calibrates what both ends know.
 
 The "GS receiver width is 20" wording is also what a 40 MHz GS says when it
-is the linked drone that flies 20.
+is the linked older drone that flies 20.
+
+**Both widths in one run.** A `CAP_CAL_WIDE` drone tunes itself to 40 MHz
+for a 40 MHz sweep (`CalSweep::PowerCtl::tune_width`: the full channel
+set and a TX-power re-apply on the channel it is on, under the exclusive
+`tx_gate`), re-reads its anchor (the chip's reference is per width), and
+tunes back to the width it flew when the run closes, however it closes.
+The GS's cards follow: while the current sweep is 40 MHz,
+`CalSession::cal_width()` is 40 and `ChannelCore::set_cal_width` holds
+every card's width resync there; the link's own width, the hop ranker
+and the scout stay at the link's width. 20 MHz sweeps never retune; they
+fly 20 MHz frames at whatever width the radio is on. The bit tells the
+versions apart (an older drone would neither tune nor read kind 4), so
+`RC_VERSION` stays 18.
+
+The 40 MHz part of a run that also measures 20 MHz **fails soft**: what
+20 MHz applied stays written, the run ends `done`, and 40 MHz is marked
+uncalibrated with the reason (`WidthResult::skipped`, a `N` row in
+`cal.log`, `40 MHz uncalibrated: <why>` in the report). It stops there
+when:
+
+- the drone acks `no_pair`: the channel has no 40 MHz pair (165), and
+  the drone touched nothing (`floor: ch 165 has no 40 MHz pair`);
+- the floor sweep finds no value, its reference sent nothing, its report
+  was lost, or its apply was refused: the 40 MHz sweeps after it would
+  measure a transmitter that stalls (`floor: no floor passed`);
+- a 40 MHz power or capacity sweep is refused, its ack or apply times
+  out, or its apply is refused (`power40: apply refused by the drone:
+  <reason>`).
+
+A run of 40 MHz sweeps only fails on those as before, except `no_pair`
+and the floor's outcomes, which end it `done` with the reason.
 
 **Progress.** `start` then polls `status` every 500 ms and prints each
 reply, until the state is `done`, `failed` or `idle` (aborted):
@@ -164,9 +198,12 @@ store follows a calibration relocate like any hop.
    (`anchor_unreadable`: the chip cannot report its TXAGC reference, or
    would not zero its rate diffs so the reference can be read clean —
    checked again before every later power sweep of the run, which a
-   failure closes) fails the run. `unsupported` on a floor sweep (the
-   drone's radio has no runtime floor: not a Jaguar3 card) skips it and
-   the run goes on; the drone touched nothing.
+   failure closes) fails the run, or for a 40 MHz sweep after 20 MHz ones
+   skips the run's 40 MHz part ("Both widths in one run"). `unsupported`
+   on a floor sweep (the drone's radio has no runtime floor: not a
+   Jaguar3 card) skips it and the run goes on; the drone touched nothing.
+   `no_pair` (a 40 MHz sweep on a channel with no pair) skips the 40 MHz
+   part.
 3. **Silence.** From the ack the GS sends nothing — no RCF, no DISC
    keepalive, no live MAVLink — for the sweep's planned duration plus
    `phase_slack_ms` (1 s) (`CalSession::radio_silent()`).
@@ -365,7 +402,7 @@ send the same three Aborts, if a SWEEP ever went out.
 The drone needs none of it to get home: every state of its sweep engine
 (`CalSweep`, `drone/src/cal_sweep.h`) has a deadline — `await_next_ms`
 (15 s) for the next command after any sweep, apply or verify, and
-`hard_cap_ms` (180 s) for the whole run from the first accepted SWEEP.
+`hard_cap_ms` (240 s) for the whole run from the first accepted SWEEP.
 Killing `maburgs` mid-run leaves the drone to time out, restore its power
 and resume video on its own.
 
@@ -382,8 +419,12 @@ and resume video on its own.
 | apply (floor) | one round trip |
 
 The host loopback test (`test_cal_e2e`) reaches `done` for four sweeps at
-82 s simulated and for `power20` alone at 22 s. The target is a full run
-well under two minutes and a walls-only 20 MHz run under half a minute.
+82 s simulated, for the bare start's five (both widths with the floor,
+edge `0x24` behind a marginal `0x22`, from a 20 MHz link) at 115 s, and for
+`power20` alone at 22 s. The target is a full run under two minutes and a
+walls-only 20 MHz run under half a minute; the drone's `hard_cap_ms`
+(240 s) leaves room for a 70.5 s floor walk and a lossy uplink's
+resends.
 
 ## The drone during a run
 
@@ -810,12 +851,15 @@ A <bw> <0|1> <reason to end of line>                                 # per apply
 V <rate> <idx> <pct>                                                 # per verify cell
 F <floor> <min_fps>                                                  # per floor candidate tried
 L <ref_fps> <found> <confirm_pct> <written>                          # per floor sweep
+N <bw> <why to end of line>                                          # width's rest skipped
 ```
 
 `S` scopes the rows after it to its width until the next `S`; a verify
 pass writes no `S` of its own (its `V` rows follow that sweep's `A`). The
 `F` and `L` follow a floor sweep's `S` (values decimal; `found` and
-`written` 0 = none). The
+`written` 0 = none). `N` says the rest of a width's sweeps were skipped
+and why ("Both widths in one run"); the width is uncalibrated past what
+its `A` rows applied. The
 `R` line is written at the run's first ack, so a run that failed before
 any ack has none; `ldpc` is the drone's announced stamp flag (the GS has
 no LDPC setting of its own). Every index is signed and relative to the
@@ -835,7 +879,7 @@ One file holds several runs (a retry after moving the drone lands in the
 same file), each delimited by its own `R`. A file in an older format is
 renamed `cal.log.callog<N>` when `maburgs` starts, so one file never
 mixes formats. `maburcal report` reads `callog 1`-`6`: 6 is 5 plus the
-floor sweep's `F`/`L` rows; 1 and 2
+floor sweep's `F`/`L` rows and the `N` row; 1 and 2
 carry absolute indices and a `base_ref` on `R` (`-1` = undetermined), 3 is
 the single-width relative format, 4 is 5 without `P`'s `span_ms`, its
 `eff` divided by the commanded dwell and so reading high
@@ -861,11 +905,12 @@ findings page.
 | gate | command | expected |
 |---|---|---|
 | ausniff before/after | `python3 tools/bench/ausniff.py` on the GS (scp the repo copy to `/tmp` first) | ~fps of the mode, 0 gaps, both runs |
-| full run | `maburcal start` on a 40 MHz GS | four sweeps, `done`, wall-clock < 120 s; both width blocks in the table |
+| full run | `maburcal start` on a 40 MHz pair, link flying 20 | five sweeps (`power20,cap20,floor,power40,cap40`), `done`, wall-clock < 150 s; both width blocks and a `floor40:` line in the table; `maburd` logs `tuned 20 -> 40 MHz` and back to 20; the link back at 20 after |
+| no pair | `maburcal start` with op on 165 | `done`; 20 MHz block written; `40 MHz uncalibrated: floor: ch 165 has no 40 MHz pair`; no `_40` keys or floor written |
 | walls | the table vs the spike's reference at the same geometry | within ±2 on mcs4–7, mcs0–3 `no_dip` |
 | capacity | `eff` per width vs the spike's low-MCS points | within ±0.03 at mcs0–4; high points plausible, or flagged `tx_bound` and left at the existing value |
 | subset | `maburcal start power20` | one sweep, `done` < 30 s, `_40` lines untouched (`diff` against `.pre-cal`) |
-| 20 MHz GS | an all-20 ladder on the GS (derived receiver width 20) | `maburcal start` runs two sweeps; `maburcal start power40` → `err refused: GS receiver width is 20 (load a 40 MHz ladder to calibrate 40 MHz)` |
+| 20 MHz GS, older drone | an all-20 ladder on the GS (derived receiver width 20), a drone without `CAP_CAL_WIDE` | `maburcal start` runs two sweeps; `maburcal start power40` → `err refused: GS receiver width is 20 (load a 40 MHz ladder to calibrate 40 MHz)` |
 | table swap | `link.static_mcs` pinned at 20 then at 40 (or watch rung changes) | `maburd` log `power table 40 MHz live`; `GetTxPowerState` read-back differs between widths |
 | config | `/etc/mabur.toml` diff vs `.pre-cal` | only the per-width keys above plus `power_mode`; comments intact |
 | legacy | `legacy_wall_rel` after a `power20` | equals the 20 MHz mcs0 wall |

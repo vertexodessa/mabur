@@ -35,7 +35,25 @@ struct FakePowerCtl : CalSweep::PowerCtl {
   }
   bool zero_ok = true;
   bool zero_rate_diffs() override { ++zero_diff_calls; return zero_ok; }
-  int read_anchor_idx() override { ++read_anchor_calls; return anchor; }
+  // The anchor read at 40 MHz when anchor40 >= 0 (the chip's reference is
+  // per width); `anchor` otherwise.
+  int anchor40 = -1;
+  int read_anchor_idx() override {
+    ++read_anchor_calls;
+    return (width == 40 && anchor40 >= 0) ? anchor40 : anchor;
+  }
+  // 0 = an owner that does not retune (every pre-existing test).
+  uint8_t width = 0;
+  bool has_pair = true;
+  std::vector<uint8_t> tunes;  // every width tune_width moved the radio to
+  uint8_t tuned_width() override { return width; }
+  int tune_width(uint8_t bw) override {
+    if (bw == width) return 0;
+    if (bw == 40 && !has_pair) return -1;
+    width = bw;
+    tunes.push_back(bw);
+    return 1;
+  }
 };
 
 struct FakeCapacityCtl : CalSweep::CapacityCtl {
@@ -995,6 +1013,155 @@ TEST(an_unsupported_floor_leaves_an_open_run_running) {
   CHECK(ack->result == cal::AckResult::Unsupported);
   CHECK(s.active());
   CHECK(s.run_nonce() == 9);
+}
+
+
+// ---- the width a run flies --------------------------------------------------
+
+TEST(a_40_mhz_run_on_a_20_mhz_drone_tunes_to_40_and_back_at_its_close) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  FakeCapacityCtl cap;
+  pwr.width = 20;
+  pwr.anchor = 53;
+  pwr.anchor40 = 47;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(power_cmd(1, 0, 0x01, 0, 0, /*bw*/ 40, 1), 0, pwr);
+  auto ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::Accepted);
+  CHECK(pwr.width == 40);
+  // The anchor is the 40 MHz one: the only cell (rel 0) parks at it.
+  run_to_quiescence(s, tx, pwr, cap);
+  CHECK(pwr.index_writes.back() == 47);
+  s.on_abort(cal::Abort{1}, 1000, pwr);
+  CHECK(!s.active());
+  CHECK(pwr.width == 20);
+  CHECK(pwr.tunes == std::vector<uint8_t>({40, 20}));
+}
+
+TEST(a_20_mhz_sweep_never_retunes) {
+  FakePowerCtl pwr;
+  pwr.width = 40;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(power_cmd(2, 0, 0x01, 0, 0, /*bw*/ 20, 1), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  s.on_abort(cal::Abort{2}, 1000, pwr);
+  CHECK(pwr.tunes.empty());
+  CHECK(pwr.width == 40);
+}
+
+TEST(a_40_mhz_sweep_after_a_20_mhz_one_retunes_and_rereads_the_anchor) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  FakeCapacityCtl cap;
+  pwr.width = 20;
+  pwr.anchor = 53;
+  pwr.anchor40 = 47;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(power_cmd(3, 0, 0x01, 0, 0, 20, 1), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_to_quiescence(s, tx, pwr, cap);
+  CHECK(pwr.index_writes.back() == 53);
+  REQUIRE(s.take_done().has_value());
+  const int reads = pwr.read_anchor_calls;
+  s.on_cmd(capacity_cmd(3, 1, 0x01, /*bw*/ 40), 2000, pwr);
+  auto ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::Accepted);
+  CHECK(pwr.width == 40);
+  CHECK(pwr.read_anchor_calls == reads + 1);
+  // Capacity puts the override at the anchor: the 40 MHz one.
+  CHECK(pwr.index_writes.back() == 47);
+  // A repeat of the running sweep touches nothing.
+  s.on_cmd(capacity_cmd(3, 1, 0x01, 40), 2010, pwr);
+  CHECK(pwr.tunes == std::vector<uint8_t>({40}));
+  CHECK(pwr.read_anchor_calls == reads + 1);
+}
+
+TEST(a_channel_without_a_40_mhz_pair_acks_no_pair_and_touches_nothing) {
+  FakePowerCtl pwr;
+  pwr.width = 20;
+  pwr.has_pair = false;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(4, 0), 0, pwr);
+  auto ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::NoPair);
+  CHECK(!s.active());
+  CHECK(pwr.index_writes.empty());
+  CHECK(pwr.zero_diff_calls == 0);
+  CHECK(pwr.read_anchor_calls == 0);
+  CHECK(pwr.width == 20);
+}
+
+TEST(no_pair_mid_run_leaves_the_run_open_at_its_width) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  FakeCapacityCtl cap;
+  pwr.width = 20;
+  pwr.has_pair = false;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(power_cmd(5, 0, 0x01, 0, 0, 20, 1), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_to_quiescence(s, tx, pwr, cap);
+  REQUIRE(s.take_done().has_value());
+  s.on_cmd(power_cmd(5, 1, 0x01, 0, 0, 40, 1), 2000, pwr);
+  auto ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::NoPair);
+  CHECK(s.active());
+  CHECK(s.run_nonce() == 5);
+  CHECK(pwr.width == 20);
+  // The run carries on: a later 20 MHz sweep of it is accepted.
+  s.on_cmd(capacity_cmd(5, 2, 0x01, 20), 2100, pwr);
+  ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::Accepted);
+}
+
+TEST(an_unreadable_40_mhz_anchor_refuses_and_tunes_back) {
+  FakePowerCtl pwr;
+  pwr.width = 20;
+  pwr.anchor40 = -1;
+  pwr.anchor = -1;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(power_cmd(6, 0, 0x01, 0, 0, 40, 1), 0, pwr);
+  auto ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::AnchorUnreadable);
+  CHECK(!s.active());
+  CHECK(pwr.width == 20);
+  CHECK(pwr.tunes == std::vector<uint8_t>({40, 20}));
+}
+
+TEST(a_new_run_over_an_open_40_mhz_one_still_closes_on_the_flown_width) {
+  FakePowerCtl pwr;
+  pwr.width = 20;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(power_cmd(7, 0, 0x01, 0, 0, 40, 1), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  CHECK(pwr.width == 40);
+  // A GS restart opens a new nonce while the old run is still open.
+  s.on_cmd(power_cmd(8, 0, 0x01, 0, 0, 40, 1), 500, pwr);
+  REQUIRE(s.take_ack().has_value());
+  CHECK(s.run_nonce() == 8);
+  s.on_abort(cal::Abort{8}, 1000, pwr);
+  CHECK(pwr.width == 20);
+}
+
+TEST(an_owner_that_does_not_retune_is_never_asked_to) {
+  FakePowerCtl pwr;  // width 0
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(power_cmd(9, 0, 0x01, 0, 0, 40, 1), 0, pwr);
+  auto ack = s.take_ack();
+  REQUIRE(ack.has_value());
+  CHECK(ack->result == cal::AckResult::Accepted);
+  s.on_abort(cal::Abort{9}, 1000, pwr);
+  CHECK(pwr.tunes.empty());
 }
 
 MTEST_MAIN

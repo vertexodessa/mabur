@@ -524,6 +524,15 @@ class TestReportV6(unittest.TestCase):
         self.assertIn("floor40: floor edge none found at or above 0x20, 0x35 written",
                       render(never))
 
+    def test_a_skipped_width_says_why(self):
+        skipped = (GOOD5.replace("callog 5", "callog 6", 1)
+                   .replace("S 3 power 40 20\n",
+                            "S 6 floor 40 4000\nN 40 floor: ch 165 has no 40 MHz pair\n"
+                            "S 3 power 40 20\n"))
+        out = render(skipped)
+        self.assertIn("40 MHz uncalibrated: floor: ch 165 has no 40 MHz pair", out)
+        self.assertNotIn("uncalibrated", render(GOOD6))
+
     def test_no_floor_passed(self):
         out = render(GOOD6_NONE)
         self.assertIn("floor40: no value passed; nothing written", out)

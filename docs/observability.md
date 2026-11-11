@@ -730,11 +730,13 @@ counters `flushes= recstarts=`; reglog 2 rows end at `ioctl=` and carry
 the phase-lock fields `lock= lerr= loff= lctr=` (docs/phase-lock.md);
 reglog 1 rows end at `lslot=` before `present=`.
 
-### `cal.log` (`callog 5`)
+### `cal.log` (`callog 6`)
 
 The calibration record (`gs/src/cal_log.h`): per run an `R` line, then per
 sweep an `S` line scoping the power cells (`C`), walls (`W`), capacity
-points (`P`), apply outcomes (`A`) and verify cells (`V`) to its width. It
+points (`P`), apply outcomes (`A`) and verify cells (`V`) to its width; a
+floor sweep's candidates (`F`) and result (`L`), and a skipped width's
+reason (`N`). It
 writes regardless of `debug_log.enable` — a calibration run is a bounded
 trace on a deliberate operator action, not continuous flight logging —
 into the session directory, or `<debug_log.dir>/cal` with logging off.

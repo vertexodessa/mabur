@@ -615,7 +615,7 @@ struct RealActuator : mabur::Actuator {
   // Threading: FastRetune is a control-plane call, and devourer's IRtlRadio.h
   // threading contract forbids one concurrent with ANY other device call —
   // not just a bulk-OUT. A calibration sweep runs the three TX-power knobs
-  // (DevicePowerCtl, below) from the TX writer thread for up to 180 s, and
+  // (DevicePowerCtl, below) from the TX writer thread for up to 240 s, and
   // nothing stops a retune being requested in that time: a hop order or a
   // promoted session's DISC move in an RCF that was already queued, or
   // move_unconfirmed's return when the GS goes radio-silent for the sweep
@@ -2426,7 +2426,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
 
     while (!g_devourer_should_stop) {
       // Video quiesce: a calibration session owns the radio for its duration
-      // (up to CalSweepCfg::hard_cap_ms, 180 s), so this thread stops reading
+      // (up to CalSweepCfg::hard_cap_ms, 240 s), so this thread stops reading
       // the ring/encoding/pushing bodies for as long as cal_active is set —
       // the TX writer thread has already stopped draining TxQueue in favor of
       // cal_sweep.pump(), so anything pushed here would just pile up behind
@@ -2726,7 +2726,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // writer thread, and devourer's IRtlRadio.h contract forbids any of them
   // concurrent with a channel set. RealActuator::retune takes tx_gate
   // exclusive around FastRetune, so each call here takes it SHARED -- a cal
-  // session lasts up to 180 s, long enough for a hop, DISC or
+  // session lasts up to 240 s, long enough for a hop, DISC or
   // move_unconfirmed retune to be requested mid-sweep, so that is the normal
   // case, not a corner. retune's side of this defers the move entirely while
   // cal_active, and the deferred replay fires on the agent thread's falling
@@ -2770,6 +2770,40 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       if (gate) sg = std::shared_lock<std::shared_mutex>(*gate);
       const auto st = dev->GetTxPowerState();
       return (st.valid && st.mcs7_index >= 0) ? st.mcs7_index : -1;
+    }
+    uint8_t tuned_width() override {
+      return dev->GetSelectedChannel().ChannelWidth == CHANNEL_WIDTH_40 ? 40 : 20;
+    }
+    // A run calibrates both widths whatever the link flies, so its 40 MHz
+    // sweeps tune the radio to 40 on the channel it is on, and its close
+    // tunes back to the width the run found. The channel set goes past RealActuator, which keeps
+    // its own idea of the width; the close lands on the width it knows,
+    // and a retune requested meanwhile is deferred until the run ends.
+    // Exclusive, as a retune is: a channel set must not overlap a bulk-OUT.
+    int tune_width(uint8_t bw) override {
+      const SelectedChannel sel = dev->GetSelectedChannel();
+      const uint8_t ch = static_cast<uint8_t>(sel.Channel);
+      const uint8_t at = sel.ChannelWidth == CHANNEL_WIDTH_40 ? 40 : 20;
+      if (bw == at) return 0;
+      if (bw == 40 && mabur::ht40_offset(ch) == 0) return -1;
+      if (gate_waiting) gate_waiting->store(true, std::memory_order_release);
+      bool power_ok = false;
+      {
+        std::unique_lock<std::shared_mutex> g;
+        if (gate) g = std::unique_lock<std::shared_mutex>(*gate);
+        dev->SetMonitorChannel(bw == 40
+                                   ? SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40}
+                                   : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
+        // The channel set re-derives nothing at mabur's settings; the
+        // re-apply puts the table on the new width's references (see
+        // RealActuator::retune_now_).
+        power_ok = dev->ReApplyTxPower();
+      }
+      if (gate_waiting) gate_waiting->store(false, std::memory_order_release);
+      std::fprintf(stderr, "maburd cal: ch %u tuned %u -> %u MHz (tx power re-applied: %s)\n",
+                   static_cast<unsigned>(ch), static_cast<unsigned>(at),
+                   static_cast<unsigned>(bw), power_ok ? "ok" : "failed");
+      return 1;
     }
   };
 

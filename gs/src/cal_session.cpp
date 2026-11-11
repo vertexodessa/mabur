@@ -153,8 +153,14 @@ void CalSession::on_mav(const cal::CalMsg& m, uint64_t now_ms) {
       next_sweep(now_ms);
       return;
     }
+    if (a->result == cal::AckResult::NoPair) {
+      // The channel has no 40 MHz pair (165): nothing at 40 can run on it.
+      if (cmd_.kind == cal::Kind::Floor) floor_.note = "no 40 MHz pair";
+      skip_wide("ch " + std::to_string(channel_) + " has no 40 MHz pair", now_ms);
+      return;
+    }
     if (a->result != cal::AckResult::Accepted) {
-      fail(std::string("sweep refused by the drone: ") + ack_word(a->result));
+      fail_or_skip(std::string("sweep refused by the drone: ") + ack_word(a->result), now_ms);
       return;
     }
     on_accepted(a->flags, a->start_in_ms, now_ms);
@@ -339,7 +345,8 @@ void CalSession::step(uint64_t now_ms) {
       step_picking(now_ms);
       break;
     case State::AwaitAck:
-      if (now_ms - phase_start_ms_ >= cfg_.ack_timeout_ms) fail("calibration ack timeout");
+      if (now_ms - phase_start_ms_ >= cfg_.ack_timeout_ms)
+        fail_or_skip("calibration ack timeout", now_ms);
       break;
     case State::Sweep:
     case State::AwaitDone:
@@ -356,7 +363,8 @@ void CalSession::step(uint64_t now_ms) {
       if (now_ms >= window_end_ms_) finish_sweep(now_ms);
       break;
     case State::Apply:
-      if (now_ms - phase_start_ms_ >= cfg_.apply_timeout_ms) fail("calibration apply timeout");
+      if (now_ms - phase_start_ms_ >= cfg_.apply_timeout_ms)
+        fail_or_skip("calibration apply timeout", now_ms);
       break;
     case State::Verify:
       if (now_ms >= window_end_ms_) finish_verify(now_ms);
@@ -538,6 +546,10 @@ void CalSession::finish_sweep(uint64_t now_ms) {
                                                      : analyze_capacity_sweep();
   if (apply)
     begin_apply(now_ms);
+  else if (cmd_.kind == cal::Kind::Floor)
+    // Without a floor that holds, the 40 MHz sweeps after it would measure
+    // a transmitter that stalls: the 40 MHz part stops here.
+    skip_wide(floor_.note, now_ms);
   else
     next_sweep(now_ms);
 }
@@ -687,7 +699,7 @@ void CalSession::on_applied(const cal::Applied& a, uint64_t now_ms) {
     floor_.applied = a.ok;
     floor_.note = a.reason;
     if (!a.ok) {
-      fail("floor apply refused by the drone: " + a.reason);
+      skip_wide("floor apply refused by the drone: " + a.reason, now_ms);
       return;
     }
     next_sweep(now_ms);
@@ -697,7 +709,7 @@ void CalSession::on_applied(const cal::Applied& a, uint64_t now_ms) {
   w.applied = a.ok;
   w.apply_reason = a.reason;
   if (!a.ok) {
-    fail("apply refused by the drone: " + a.reason);
+    fail_or_skip("apply refused by the drone: " + a.reason, now_ms);
     return;
   }
   if (cmd_.kind == cal::Kind::Power && apply_wrote_walls_)
@@ -740,6 +752,38 @@ void CalSession::next_sweep(uint64_t now_ms) {
     begin_sweep(sweep_i_ + 1, now_ms);
     return;
   }
+  finish_run();
+}
+
+void CalSession::fail_or_skip(const std::string& why, uint64_t now_ms) {
+  // The 40 MHz part of a run that measured 20 MHz too: what 20 MHz applied
+  // stays, and the run ends Done with 40 MHz uncalibrated.
+  if (cmd_.bw == 40 && has_width(20)) {
+    skip_wide(why, now_ms);
+    return;
+  }
+  fail(why);
+}
+
+void CalSession::skip_wide(const std::string& why, uint64_t now_ms) {
+  WidthResult& w = width_[1];
+  w.skipped = std::string(cmd_.kind == cal::Kind::Floor      ? "floor"
+                          : cmd_.kind == cal::Kind::Capacity ? "cap40"
+                                                             : "power40") +
+              ": " + why;
+  if (log_) log_->skipped(40, w.skipped);
+  // The sweeps are sorted by width, so whatever follows a 40 MHz sweep is
+  // 40 MHz too.
+  size_t j = sweep_i_ + 1;
+  while (j < sweeps_.size() && sweeps_[j].bw == 40) ++j;
+  if (j < sweeps_.size()) {
+    begin_sweep(j, now_ms);
+    return;
+  }
+  finish_run();
+}
+
+void CalSession::finish_run() {
   state_ = State::Done;
   // Closes the drone's run now -- restoring its operating power and video
   // -- instead of after its await window; the drone's close keeps the
@@ -769,6 +813,16 @@ void CalSession::queue_abort() {
 int CalSession::cells_per_row() const { return std::max(0, cmd_.idx_hi - cmd_.idx_lo + 1); }
 
 WidthResult& CalSession::width_result() { return width_[cmd_.bw == 40 ? 1 : 0]; }
+
+bool CalSession::has_width(uint8_t bw) const {
+  for (const auto& s : sweeps_)
+    if (s.bw == bw) return true;
+  return false;
+}
+
+uint8_t CalSession::cal_width() const {
+  return running() && cmd_.bw == 40 ? 40 : 0;
+}
 
 bool CalSession::has_power20() const {
   for (const auto& s : sweeps_)

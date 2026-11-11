@@ -79,6 +79,10 @@ struct WidthResult {
                           mabur::cal::kWallLeave, mabur::cal::kWallLeave};
   // Best-card verify delivery per rate; -1 = the rate was not verified.
   std::array<int, 8> verify_pct{-1, -1, -1, -1, -1, -1, -1, -1};
+  // Why this width's remaining sweeps were skipped ("" = none were): the
+  // width is uncalibrated past what was applied before it. Only the 40 MHz
+  // part of a run is skipped, never failed (CalSession::skip_wide).
+  std::string skipped;
 };
 
 // What the run's floor sweep produced (cal_floor.h).
@@ -166,6 +170,11 @@ class CalSession {
   bool running() const;
   // running()'s set of states, for a caller holding only a snapshot.
   static bool is_running(State st);
+  // The width the GS's cards must be held at for the sweep in hand: 40
+  // while a running run's current sweep is 40 MHz (its SweepCmd, the
+  // sweep, its apply and verify), 0 otherwise (the link's own width). The
+  // drone tunes itself to 40 on the SweepCmd and back at the run's close.
+  uint8_t cal_width() const;
 
   // Abandons the run from any state: the Aborts go out through due_mav()
   // (if the run already reached the drone), a pick in progress is
@@ -221,6 +230,13 @@ class CalSession {
   void begin_verify(uint64_t now_ms);
   void finish_verify(uint64_t now_ms);
   void next_sweep(uint64_t now_ms);
+  void finish_run();
+  // A 40 MHz sweep of a run that also measures 20 MHz is skipped
+  // (skip_wide); anything else fails the run.
+  void fail_or_skip(const std::string& why, uint64_t now_ms);
+  // Records why on width_[1].skipped (and cal.log) and goes on past the
+  // run's remaining 40 MHz sweeps: Done with what was applied so far.
+  void skip_wide(const std::string& why, uint64_t now_ms);
   void fail(const std::string& why);
   void queue_abort();
   void tally_power(int card, const mabur::cal::CalFrameInfo& f, int rssi_dbm, bool crc_ok);
@@ -233,6 +249,7 @@ class CalSession {
   int cells_per_row() const;
   WidthResult& width_result();
   bool has_power20() const;
+  bool has_width(uint8_t bw) const;
 
   CalSessionCfg cfg_;
   CalLog* log_ = nullptr;
