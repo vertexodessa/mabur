@@ -430,15 +430,21 @@ def _render_run_v4(run):
 
 
 def _floor_lines(run):
-    """The floor sweep's outcome (callog 6): what was found and written,
-    then each candidate's worst second against the reference rate."""
+    """The floor sweep's outcome (callog 6): the unit's edge and the value
+    written (never under the default, cal_floor.h floor_to_write), then
+    each candidate's worst second against the reference rate."""
     if not run.floor_swept:
         return []
     if run.floor is None:
         return ["floor40: no result (the drone's report was lost)"]
     ref, found, confirm, written = run.floor
-    if found:
-        head = (f"floor40: 0x{found:02x} passed ({confirm}% worst second confirmed), "
+    lowest = run.floor_rows[0][0] if run.floor_rows else None
+    if found and found == lowest:
+        # Passed at the first candidate: the unit never stalled in the range.
+        head = (f"floor40: floor edge none found at or above 0x{lowest:02x}, "
+                f"0x{written:02x} written")
+    elif found:
+        head = (f"floor40: floor edge 0x{found:02x} ({confirm}% worst second confirmed), "
                 f"0x{written:02x} written")
     elif ref == 0:
         head = "floor40: the reference point sent nothing; nothing written"
