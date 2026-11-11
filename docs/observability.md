@@ -114,7 +114,12 @@ been seen: the commanded `ov`, FEC `recovered`/`abandoned` (and their
   (`rx.keep_corrupted`, set unconditionally in `gs/src/radio_frontend.cpp`),
   so a corrupt frame reaches the aggregator, bumps that card's `crc_fail`,
   stays out of the seq walk, and hands its body to the UEP decoder, which
-  keeps the SBI sub-blocks whose own CRC16 still passes. `corrupt` =
+  keeps the SBI sub-blocks whose own CRC16 still passes. The SBI header has
+  no CRC, so a bit error in its stream id byte would move those sub-blocks
+  to another stream: a corrupt body goes to the stream its header names only
+  if some card heard that stream FCS-good within 500 ms, and otherwise goes
+  nowhere, unless no SBI body at all was FCS-good for 500 ms (a fade, where
+  salvage is all there is), when every corrupt body is routed as named. `corrupt` =
   FCS-corrupt bodies delivered, `salvaged` = CRC16-clean sub-blocks taken
   out of them, `sub_fail` = sub-blocks that failed (from any body),
   `salvage_only` = seqs whose ONLY arrival inside the arrival guard was a

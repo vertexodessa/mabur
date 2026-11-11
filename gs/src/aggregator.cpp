@@ -13,6 +13,15 @@ namespace {
 // bounded-walk stance the since-deleted common/src/uep_decoder.cpp's
 // note_delivery() used).
 constexpr uint16_t kMaxSeqGap = 512;
+// How recently a stream must have been heard FCS-good for an FCS-bad body
+// naming it to be routed: ten probe periods, a few hundred video bodies.
+constexpr uint64_t kCleanStreamUs = 500000;
+
+// True when the last FCS-good body (stamp + 1, 0 = never) is within
+// kCleanStreamUs of now.
+bool heard_within(uint64_t stamp, uint64_t now_us) {
+  return stamp != 0 && now_us + 1 >= stamp && now_us + 1 - stamp <= kCleanStreamUs;
+}
 constexpr double kEmaAlpha = 0.1;
 
 // EVM fold shared by CardTrack and ClassTrack (identical field names).
@@ -149,6 +158,10 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
                    m.phy_valid ? 1 : 0, m.rssi[0], m.rssi[1], m.snr[0],
                    m.snr[1], stream_id);
   } else {
+    if (stream_id >= 0) {
+      sid_clean_us_[static_cast<size_t>(stream_id)] = m.mono_us + 1;
+      any_clean_us_ = m.mono_us + 1;
+    }
     // Per-card delivery from 12-bit hw-seq gaps. The drone's VIDEO counter
     // numbers every injected decoder-bound body. last_seq is a MAX-seq
     // high-water mark, not the previous frame: the drone's parallel USB feed
@@ -280,13 +293,26 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
     if (rc_sink_) rc_sink_(m.card_id, m.body, m.mono_us);
     return;
   }
+  // The SBI header has no CRC of its own and the sub-blocks keep theirs, so
+  // one bit error in the stream id byte of an FCS-bad body would move its
+  // CRC-good blocks to another stream (base symbols into stream 1's
+  // decoder, a video body into the MSP or probe sink). Such a body is
+  // routed only to a stream some card heard FCS-good within kCleanStreamUs;
+  // otherwise it stays a crc_fail and goes nowhere. In a fade with no
+  // FCS-good SBI body at all for that long, salvage is the only source left,
+  // so every FCS-bad body is routed by its peeked id as before.
+  if (!m.crc_ok && heard_within(any_clean_us_, m.mono_us)) {
+    const uint64_t seen = stream_id >= 0 ? sid_clean_us_[static_cast<size_t>(stream_id)] : 0;
+    if (!heard_within(seen, m.mono_us)) return;
+  }
   if (stream_id == mabur::kMspStreamId) {
     if (msp_sink_) msp_sink_(m.body.data(), m.body.size(), m.mono_us);
     return;
   }
   if (stream_id == mabur::kProbeStreamId) {
     // Probe stream: scored by ProbeTrack, never decoded.
-    // FCS-failed bodies still reach the sink — parse_probe_body salvages
+    // FCS-failed bodies still reach the sink (behind the same clean-stream
+    // gate as video) — parse_probe_body salvages
     // CRC-clean sub-blocks exactly as the video decoder does, so probe loss
     // stays comparable to video loss.
     if (probe_sink_) probe_sink_(m.card_id, m);
