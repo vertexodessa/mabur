@@ -89,6 +89,14 @@ void CalSweep::on_cmd(const cal::SweepCmd& c, uint64_t now_ms, PowerCtl& pwr) {
   // hard_cap_ms keeps bounding the run it was armed for and an abort
   // cannot be undone by a late retransmission.
   if (new_session && last_nonce_valid_ && c.nonce == last_closed_nonce_) return;
+  // An exact repeat of the running sweep, or a stale earlier one, never
+  // retunes; any other 40 MHz command may. A new nonce over a run still open
+  // inherits that run's starting width, so the close still lands on the
+  // width the link flew.
+  const bool repeat_or_stale = !new_session && static_cast<int>(c.seq) <= last_started_seq_;
+  const uint8_t width_before = has_session_ ? run_width_ : pwr.tuned_width();
+  const int tuned = repeat_or_stale ? 0 : tune_for(c, new_session, pwr);
+  if (tuned < 0) return;
   if (new_session) {
     // A brand-new nonce arriving while a run is still live -- any second
     // `maburcal start` after an abort, after a GS restart, or within
@@ -106,31 +114,13 @@ void CalSweep::on_cmd(const cal::SweepCmd& c, uint64_t now_ms, PowerCtl& pwr) {
     // A table that would not zero reads reference + diff, not the
     // reference: no read is taken off it, and the command is refused as
     // an unreadable anchor is.
-    const bool zeroed = pwr.zero_rate_diffs();
-    const int anchor = zeroed ? pwr.read_anchor_idx() : -1;
-    if (anchor < 0) {
-      // Cannot place a relative cell without the reference: refuse this
-      // command, answering with an explicit ack rather than staying
-      // silent. Full teardown (not just has_session_ = false), so
-      // pump()'s switch(state_) never keeps dispatching into a stale
-      // Sweeping state for cells nobody owns any more.
-      has_session_ = false;
-      state_ = State::Idle;
-      cursor_ = 0;
-      cell_entered_ = false;
-      cells_.clear();
-      pending_done_.reset();
-      repeat_done_.reset();
-      pending_apply_.reset();
-      pending_ack_ = cal::SweepAck{c.nonce, c.seq, cal::AckResult::AnchorUnreadable, 200,
-                                   stamp_flags()};
-      // zero_rate_diffs() above already flattened the table and nothing
-      // here undoes it -- this class's PowerCtl has no concept of the
-      // operating plan, so only the caller can put the real table back.
-      pending_refusal_ = true;
+    if (!read_anchor(c, pwr)) {
+      // Opened at 20 and tuned for this command: nothing is left open to
+      // tune it back at a close, so put the width back here.
+      if (tuned > 0 && width_before != 0) pwr.tune_width(width_before);
       return;
     }
-    anchor_idx_ = anchor;
+    run_width_ = width_before;
     nonce_ = c.nonce;
     has_session_ = true;
     hard_cap_deadline_ms_ = now_ms + cfg_.hard_cap_ms;
@@ -165,6 +155,19 @@ void CalSweep::on_cmd(const cal::SweepCmd& c, uint64_t now_ms, PowerCtl& pwr) {
                                    stamp_flags()};
       pending_refusal_ = true;
       return;
+    }
+    // A width change moves the chip's reference: every later cell of the
+    // run is placed against the anchor of the width it flies.
+    if (tuned > 0) {
+      const int anchor = pwr.zero_rate_diffs() ? pwr.read_anchor_idx() : -1;
+      if (anchor < 0) {
+        close_session(pwr);
+        pending_ack_ = cal::SweepAck{c.nonce, c.seq, cal::AckResult::AnchorUnreadable, 200,
+                                     stamp_flags()};
+        pending_refusal_ = true;
+        return;
+      }
+      anchor_idx_ = anchor;
     }
   }
 
@@ -206,6 +209,51 @@ void CalSweep::on_cmd(const cal::SweepCmd& c, uint64_t now_ms, PowerCtl& pwr) {
   sweep_start_ms_ = now_ms + 200;
   pending_ack_ = cal::SweepAck{nonce_, c.seq, cal::AckResult::Accepted,
                                remaining_start_ms(now_ms), stamp_flags()};
+}
+
+int CalSweep::tune_for(const cal::SweepCmd& c, bool new_session, PowerCtl& pwr) {
+  const uint8_t at = pwr.tuned_width();
+  if (at == 0 || at == 40 || c.bw != 40) return 0;
+  const int r = pwr.tune_width(40);
+  if (r < 0) {
+    // No pair on this channel: the GS skips the run's 40 MHz part. An
+    // open run is left at its width, its next command still welcome.
+    if (!new_session) repeat_done_.reset();
+    pending_ack_ = cal::SweepAck{c.nonce, c.seq, cal::AckResult::NoPair, 0, stamp_flags()};
+  }
+  return r;
+}
+
+bool CalSweep::read_anchor(const cal::SweepCmd& c, PowerCtl& pwr) {
+  // A table that would not zero reads reference + diff, not the
+  // reference: no read is taken off it, and the command is refused as
+  // an unreadable anchor is.
+  const bool zeroed = pwr.zero_rate_diffs();
+  const int anchor = zeroed ? pwr.read_anchor_idx() : -1;
+  if (anchor >= 0) {
+    anchor_idx_ = anchor;
+    return true;
+  }
+  // Cannot place a relative cell without the reference: refuse this
+  // command, answering with an explicit ack rather than staying silent.
+  // Full teardown (not just has_session_ = false), so pump()'s
+  // switch(state_) never keeps dispatching into a stale Sweeping state
+  // for cells nobody owns any more.
+  has_session_ = false;
+  state_ = State::Idle;
+  cursor_ = 0;
+  cell_entered_ = false;
+  cells_.clear();
+  pending_done_.reset();
+  repeat_done_.reset();
+  pending_apply_.reset();
+  pending_ack_ =
+      cal::SweepAck{c.nonce, c.seq, cal::AckResult::AnchorUnreadable, 200, stamp_flags()};
+  // zero_rate_diffs() above already flattened the table and nothing here
+  // undoes it -- this class's PowerCtl has no concept of the operating
+  // plan, so only the caller can put the real table back.
+  pending_refusal_ = true;
+  return false;
 }
 
 void CalSweep::on_apply(const cal::ApplyCmd& a, uint64_t now_ms) {
@@ -534,6 +582,10 @@ void CalSweep::close_session(PowerCtl& pwr) {
     last_closed_nonce_ = nonce_;
     last_nonce_valid_ = true;
   }
+  // Back to the width the link flew before the run's first retune. The
+  // owner's falling edge re-applies the operating plan on top of it.
+  if (has_session_ && run_width_ != 0 && pwr.tuned_width() != run_width_)
+    pwr.tune_width(run_width_);
   has_session_ = false;
   state_ = State::Idle;
   cursor_ = 0;
