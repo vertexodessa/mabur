@@ -404,8 +404,8 @@ legacy_wall_rel   = 63
 wall_margin_db    = 1.0
 
 [air_clock]
-efficiency_20 = [0.93, 0.88, 0.84, 0.80, 0.76, 0.76, 0.78, 0.76]
-efficiency_40 = [0.77, 0.75, 0.75, 0.75, 0.74, 0.77, 0.76, 0.75]
+efficiency_20 = [0.90, 0.87, 0.84, 0.81, 0.77, 0.73, 0.71, 0.68]
+efficiency_40 = [0.87, 0.81, 0.76, 0.72, 0.65, 0.58, 0.57, 0.54]
 ```
 
 - **`rate_walls_rel_20` / `_40`** are both optional; `power_mode =
