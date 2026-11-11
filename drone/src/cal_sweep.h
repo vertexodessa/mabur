@@ -50,8 +50,11 @@ struct CalSweepCfg {
   // Absolute ceiling on one calibration run (every kind/width sweep of one
   // nonce combined -- Power, its Verify, and any Capacity sweeps that
   // follow), from the first accepted SweepCmd. The backstop for "the GS
-  // never speaks again" -- see constraint 2.
-  uint32_t hard_cap_ms = 180000;
+  // never speaks again" -- see constraint 2. The default run (power,
+  // capacity and the verifies at 20 MHz, the floor walk, then power and
+  // capacity at 40) takes about 83 s plus a 32-71 s floor walk; 240 s
+  // leaves room for the ack resends of a lossy uplink.
+  uint32_t hard_cap_ms = 240000;
   // How long to wait for the next run event -- the next SweepCmd, an
   // on_apply, or (once an apply is drained) the arm_verify it should
   // trigger -- before giving up on the run and restoring power on its
@@ -117,6 +120,15 @@ class CalSweep {
     // The chip's TXAGC reference for the current channel with the diff
     // table zeroed and no override live; -1 if the chip cannot report it.
     virtual int read_anchor_idx() = 0;
+    // The width the radio is tuned to (20 or 40); 0 = this owner does not
+    // retune for calibration, and every sweep flies at the tuned width.
+    virtual uint8_t tuned_width() { return 0; }
+    // Tunes the radio's current channel to `bw`: 1 retuned, 0 already
+    // there, -1 refused (40 on a channel with no 40 MHz pair).
+    virtual int tune_width(uint8_t bw) {
+      (void)bw;
+      return 0;
+    }
   };
 
   // Test/production seam for a Capacity point. Owned by the TX writer
@@ -150,7 +162,19 @@ class CalSweep {
   // no run opens and an open one carries on. A Floor sweep walks
   // cal_floor.h's candidates through CapacityCtl (set_point, set_wide_floor,
   // blast) and reports in a SweepDone packed by pack_floor_done; it ends
-  // with restore_wide_floor(). A brand-new nonce starts a fresh run
+  // with restore_wide_floor().
+  //
+  // A 40 MHz sweep on a drone tuned to 20 (PowerCtl::tuned_width) tunes
+  // it to 40 first, so a link flying 20 still gets its 40 MHz tables
+  // measured on a 40 MHz transmitter; the run's close tunes back to the
+  // width the run started at. A 20 MHz sweep never retunes: it flies 20
+  // MHz frames at whatever width the radio is on, as it always has. A channel with no 40 MHz pair
+  // is acked NoPair with nothing touched (no run opens; an open one
+  // carries on at its width). A width change re-reads the anchor (the
+  // chip's reference is per width), refusing AnchorUnreadable and closing
+  // the run as a later power sweep's zeroing failure does.
+  //
+  // A brand-new nonce starts a fresh run
   // (state -> Sweeping, cell cursor reset, the chip's anchor captured
   // right here, synchronously), UNLESS that nonce is the one this engine
   // just closed (hard cap, abort, or the await timeout) -- a straggler or
@@ -333,6 +357,12 @@ class CalSweep {
   bool supported(const cal::SweepCmd& c) const;
   void finish_sweep(uint64_t now_ms);
   void close_session(PowerCtl& pwr);
+  // The tuning half of on_cmd for a command this drone runs: -1 = acked
+  // NoPair, nothing touched; 0 = no width change; 1 = retuned to 40.
+  int tune_for(const cal::SweepCmd& c, bool new_session, PowerCtl& pwr);
+  // Zeroes the diffs and reads the anchor; false (and the session torn
+  // down, the refusal acked) when either fails.
+  bool read_anchor(const cal::SweepCmd& c, PowerCtl& pwr);
   // Milliseconds left until sweep_start_ms_, clamped to 0 once it has
   // passed -- what a SweepAck's start_in_ms reports.
   uint16_t remaining_start_ms(uint64_t now_ms) const;
@@ -348,6 +378,9 @@ class CalSweep {
   uint32_t nonce_ = 0;
   int last_started_seq_ = -1;  // -1 = no sweep accepted yet this run
   uint64_t hard_cap_deadline_ms_ = 0;  // whole-run ceiling
+  // The width the radio was tuned to when the run opened (0 = the owner
+  // does not retune); close_session tunes back to it.
+  uint8_t run_width_ = 0;
   uint64_t await_deadline_ms_ = 0;     // between-event wait
 
   // The last nonce this engine closed (hard cap, abort or await timeout),
