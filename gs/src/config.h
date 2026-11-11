@@ -234,7 +234,8 @@ struct LinkCfg {
 /// Video reassembly tuning (PR C: the RTP output destination is gone --
 /// video leaves maburgs via the shm AU ring; see AuRingOutCfg):
 /// gap_timeout_ms before an unfilled chunk gap is truncated, and lookahead
-/// frames ahead of head-of-line before it is force-advanced.
+/// frames ahead of head-of-line before it is force-advanced (a lone frame,
+/// with no other within lookahead ids, does not count).
 struct VideoCfg {
   int frame_gap_timeout_ms = 50;
   // Rate-aware ceiling for the gap timeout (gap_timeout_policy.h): at low

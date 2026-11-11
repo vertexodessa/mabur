@@ -68,6 +68,7 @@ void FrameStream::push_fragment(uint8_t sid, const uint8_t* pkt, size_t len,
     bool rebased = false;
     s.id64 = unwrap_id(h->frame_id, h->flags, &rebased);
     s.discont = rebased;
+    s.emits_at_hdr = clean_ + truncated_;
     if (rebased) params_.reset();  // producer restart may change resolution
     if ((h->flags & mabur::framewire::kFlagDiscont) != 0)
       discont_seen_since_emit_ = true;
@@ -125,11 +126,12 @@ void FrameStream::try_emit(uint64_t now_ms) {
     // a corrupt header the block CRC let through) the one already begun
     // stays the head, so a second frame never begins inside an open one;
     // the other is late once the head finishes.
+    // Lone frames (see lone()) do not count as the stream having run ahead.
     Slot* head = nullptr;
     uint64_t max_known = 0;
     for (auto& [k, s] : slots_) {
       if (!s.have_hdr) continue;
-      if (s.id64 > max_known) max_known = s.id64;
+      if (s.id64 > max_known && !lone(s)) max_known = s.id64;
       if (!head || s.id64 < head->id64 || (s.id64 == head->id64 && s.began)) head = &s;
     }
     if (!head) return;
@@ -143,8 +145,21 @@ void FrameStream::try_emit(uint64_t now_ms) {
         // stale (timeout) or the pipeline has run ahead (lookahead). The
         // missing frame's sid is unknowable, so wait the slower stream out.
         bool stale = now_ms >= head->first_ms + gap_ms_max();
-        bool ahead = max_known >= next_emit_id64_ + static_cast<uint64_t>(cfg_.lookahead);
-        if (!stale && !ahead) return;
+        if (lone(*head)) {
+          if (!stale) return;
+          // Frames were emitted after this one arrived, so the stream is
+          // alive below it: the far id is forged or corrupt, not the next
+          // frame after an outage. Skipping to it would make every real
+          // frame late until the stall watchdog fired.
+          if (clean_ + truncated_ != head->emits_at_hdr) {
+            ++dropped_;
+            slots_.erase((static_cast<uint32_t>(head->sid) << 16) | head->fseq);
+            continue;
+          }
+        } else {
+          bool ahead = max_known >= next_emit_id64_ + static_cast<uint64_t>(cfg_.lookahead);
+          if (!stale && !ahead) return;
+        }
         dropped_ += head->id64 - next_emit_id64_;
         head->lat.skipped_before += static_cast<uint32_t>(head->id64 - next_emit_id64_);
         next_emit_id64_ = head->id64;
@@ -181,6 +196,21 @@ void FrameStream::try_emit(uint64_t now_ms) {
     if (stale || ahead) { finish(*head, false); continue; }
     return;
   }
+}
+
+// A frame at least lookahead ids past the emit cursor, without the discont
+// flag, with no other known frame within lookahead ids of it. Video carries
+// no key tag, so one forged or corrupt header can name any id; a real
+// stream that resumes after an outage confirms the jump with its next frame.
+bool FrameStream::lone(const Slot& s) const {
+  if (!have_next_emit_ || s.discont || cfg_.lookahead <= 0) return false;
+  const uint64_t la = static_cast<uint64_t>(cfg_.lookahead);
+  if (s.id64 < next_emit_id64_ + la) return false;
+  for (const auto& [k, t] : slots_)
+    if (t.have_hdr && t.id64 != s.id64 &&
+        (t.id64 > s.id64 ? t.id64 - s.id64 : s.id64 - t.id64) <= la)
+      return false;
+  return true;
 }
 
 void FrameStream::finish(Slot& s, bool complete) {

@@ -860,3 +860,51 @@ TEST(two_slots_with_one_frame_id_do_not_nest) {
   CHECK(cap.evs[0].sid == 1);
   CHECK(fs.frames_dropped() >= 1);
 }
+
+TEST(forged_frame_ahead_does_not_freeze_the_stream) {
+  // A 120 fps stream; one frame with an id 200 ahead arrives on the other
+  // layer every 240 ms. Skipping to it would make every real frame late, and
+  // each emitted forged frame would disarm the stall watchdog: no real frame
+  // again. The lone frame is dropped instead.
+  Capture cap;
+  FrameStream fs({50, 8, 500}, cap.cbs());
+  mabur::Fragmenter real, forged;
+  std::vector<uint8_t> pay(100, 0xAB);
+  uint64_t t = 10;
+  int forged_n = 0;
+  for (uint16_t id = 0; id < 600; ++id, t += 8) {
+    for (auto& p : frag_frame(real, id, pay)) fs.push_fragment(0, p.data(), p.size(), t);
+    if (id % 30 == 5) {
+      for (auto& p : frag_frame(forged, static_cast<uint16_t>(id + 200), pay))
+        fs.push_fragment(1, p.data(), p.size(), t + 1);
+      ++forged_n;
+    }
+    fs.poll(t + 4);
+  }
+  CHECK(fs.frames_clean() == 600);
+  CHECK(fs.stall_resets() == 0);
+  CHECK(fs.frames_dropped() == static_cast<uint64_t>(forged_n));
+  for (const auto& e : cap.evs) CHECK(e.kind != 'B' || e.sid == 0);
+}
+
+TEST(outage_jump_waits_for_a_second_frame_or_the_gap_timeout) {
+  Capture cap;
+  FrameStream fs({50, 8, 500}, cap.cbs());
+  mabur::Fragmenter frag;
+  std::vector<uint8_t> pay(100, 0xAB);
+  for (uint16_t id = 0; id < 10; ++id)
+    for (auto& p : frag_frame(frag, id, pay)) fs.push_fragment(0, p.data(), p.size(), 10 + id);
+  // 190 frames lost; the stream resumes at 200: emitted once 201 confirms.
+  for (auto& p : frag_frame(frag, 200, pay)) fs.push_fragment(0, p.data(), p.size(), 400);
+  CHECK(fs.frames_clean() == 10);
+  for (auto& p : frag_frame(frag, 201, pay)) fs.push_fragment(0, p.data(), p.size(), 408);
+  CHECK(fs.frames_clean() == 12);
+  CHECK(fs.frames_dropped() == 190);
+  // Another outage, and only one frame survives it: nothing was emitted
+  // after it arrived, so the gap timeout lets it through.
+  for (auto& p : frag_frame(frag, 400, pay)) fs.push_fragment(0, p.data(), p.size(), 800);
+  fs.poll(840);
+  CHECK(fs.frames_clean() == 12);
+  fs.poll(851);
+  CHECK(fs.frames_clean() == 13);
+}
