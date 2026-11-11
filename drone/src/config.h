@@ -69,6 +69,17 @@ struct RadioCfg {
   // that cannot decode HT-LDPC (RTL8821AU, bench: 1/1000 LDPC vs
   // 900+/1000 BCC). Costs every GS the LDPC coding gain while off.
   bool ldpc = true;
+  // The radio driver's receive-gain (IGI) floor while 40 MHz frames fly;
+  // 0 = none. Without one a card's receiver can park where the secondary
+  // 20 MHz never reads idle, and the MAC then holds every 40 MHz frame: one
+  // 8822E airs nothing at 0x1e-0x20 and runs clean from 0x24, another
+  // clears at 0x2c, an 8822C needs 0x35. Each step costs about 1 dB of the
+  // drone's uplink sensitivity while the floor is on, so the number to keep
+  // here is the unit's own lowest clean value plus a margin; the default is
+  // the lowest value that has cleared every unit measured. The driver
+  // turns the floor on at the first 40 MHz frame: a 20 MHz flight never
+  // pays for it.
+  int wide_tx_igi_floor = 0x35;
 };
 
 struct FecCfg {

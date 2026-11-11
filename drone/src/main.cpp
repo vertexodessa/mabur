@@ -1395,26 +1395,14 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // burst edge where a blind drone restarts
   // (docs/findings/2026-08-14-rcf-uplink-loss.md §6).
   dev_cfg.tuning.disable_cca = false;
-  // devourer's wide-TX IGI floor: off on an 8812EU image, devourer's default
-  // on an 8812CU one. The floor raises the DIG lower bound for the rest of
-  // the session once the first >= 40 MHz frame goes out, because on a silent
-  // channel the receiver can park where the secondary 20 MHz never reads
-  // idle and the MAC holds that frame forever. The shipped ladder airs every
-  // rung at 40 MHz, so a floor is on from the first video frame and costs
-  // the RCF uplink idle-channel sensitivity for the whole flight (devourer
-  // estimates ~1 dB per IGI step; its default 0x35 is ~20 steps over the
-  // 0x1e-0x22 window). The 8812EU flew the 40 MHz rungs with no floor and
-  // never stalled; the 8822C is the die the stall was found on (one CU unit
-  // only clears at 0x35), so it keeps the default. The choice is per image,
-  // not per card: each drone build compiles exactly one Jaguar3 die
-  // (tools/build-arm.sh and the openipc-builder mabur package), and a binary
-  // refuses the other die at CreateRadio. An 8812EU that does stall loses the
-  // downlink at its first 40 MHz frame with the chip's TX FIFO full; give it
-  // a floor then (devourer measured one EU unit that clears at 0x2c, not
-  // 0x20).
-#if defined(DEVOURER_HAVE_JAGUAR3_8822E) && !defined(DEVOURER_HAVE_JAGUAR3_8822C)
-  dev_cfg.tuning.wide_tx_igi_floor = 0;
-#endif
+  // devourer's wide-TX IGI floor: a DIG lower bound the driver turns on at
+  // the first >= 40 MHz frame, because on a silent channel the receiver can
+  // park where the secondary 20 MHz never reads idle and the MAC then holds
+  // the frame with the chip's TX FIFO full. Which value clears is a property
+  // of the unit (config.h has the measurements), and the floor costs the RCF
+  // uplink idle-channel sensitivity while it is on, so it is a config value
+  // and not a per-die constant.
+  dev_cfg.tuning.wide_tx_igi_floor = static_cast<uint8_t>(cfg.radio.wide_tx_igi_floor);
   // Pinned here now that devourer defaults both the other way. A multi-packet
   // bulk-OUT that times out mid-transfer wedges the 8822EU's TX endpoint for
   // the rest of the session, so data sends never cancel one (the cost -- a
@@ -3552,6 +3540,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                dev_cfg.tuning.disable_cca
                    ? "OFF -- TX will not defer to co-channel traffic"
                    : "ON -- TX defers to any decodable 802.11 preamble (chip default)");
+  if (cfg.radio.wide_tx_igi_floor > 0)
+    std::fprintf(stderr, "maburd radio: wide-TX receive-gain floor 0x%02x from the first 40 MHz frame\n",
+                 static_cast<unsigned>(cfg.radio.wide_tx_igi_floor));
+  else
+    std::fprintf(stderr, "maburd radio: no wide-TX receive-gain floor -- a card that needs one stops transmitting at 40 MHz\n");
 
   // Always start clean: a flat TXAGC index override is sticky in the chip
   // across a process restart, and the ONLY place that ever sets one is a

@@ -138,14 +138,26 @@ settle where the secondary 20 MHz never reads idle, and the MAC then holds
 the first 40 MHz frame forever. A ladder with 40 MHz rungs
 turns the floor on at the first 40 MHz rung and keeps it on for the rest
 of the flight, which costs the RCF uplink idle-channel sensitivity. The
-shipped ladder is all 20 MHz, so it never turns the floor on. `maburd` picks the value per image,
-from the one Jaguar3 chip that image compiles in:
+shipped ladder is all 20 MHz, so it never turns the floor on. The value is
+`radio.wide_tx_igi_floor` in `mabur.toml` (bundle `53` = `0x35`, `0` = no
+floor), because which value clears is a property of the unit:
 
-- **8812EU**: `0` (no floor). The EU has flown the 40 MHz rungs without a
-  floor and never stalled. An EU unit that does stall loses the downlink
-  at its first 40 MHz frame, with the TX FIFO full; give that unit a floor.
-- **8812CU**: devourer's default, `0x35`. The stall was found on the 8822C,
-  and the default is the lowest value that has cleared every CU unit tested.
+- one 8812EU airs nothing at `0x1e`-`0x20` and runs clean from `0x24`
+  (`docs/findings/2026-11-11-wide-tx-floor.md`), another clears at `0x2c`,
+  and one has flown the 40 MHz rungs with no floor;
+- the 8822C the stall was found on needs `0x35`, the lowest value that has
+  cleared every unit tested, which is why it is the default.
+
+A unit without a floor that needs one does not lose the link outright
+under `maburd`: the uplink frames it hears move its gain off the parked
+value, so the video arrives with holds of tens of milliseconds (drone TX
+queue wait p90 20-170 ms, capture-to-complete p50 59 ms against 27 ms).
+Each step of the floor costs about 1 dB of uplink sensitivity while it is
+on, so a unit's own lowest clean value plus a margin of 2-4 steps is the
+number to keep; `linkbench-tx --wide-igi-floor N` finds it (saturated
+40 MHz TX with the ground silent, one value at a time, pass = the full
+send rate with no stalled second). At bring-up `maburd` logs the value it
+runs.
 
 The 8812CU is 2T2R, so STBC airs on two real chains; none of the 8822E
 constraints in devourer's 8822E quirks page
