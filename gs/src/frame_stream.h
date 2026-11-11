@@ -150,6 +150,7 @@ class FrameStream {
     bool have_seq_at_max = false;   // false => no fragment with a known sw_seq yet
     bool began = false;
     bool discont = false;           // this frame re-based the id64 space
+    uint64_t emits_at_hdr = 0;      // frames emitted when the header arrived
     // Per-AU latency latch, passed to end_frame at finish():
     //  - t_first_us: min over every stored fragment's nonzero body_mono_us
     //    (repair-completed heads carry the completing body's time —
@@ -168,6 +169,7 @@ class FrameStream {
   };
   void try_emit(uint64_t now_ms);
   void finish(Slot& s, bool complete);
+  bool lone(const Slot& s) const;
   uint64_t unwrap_id(uint16_t id, uint8_t flags, bool* rebased);
   void feed_params(Slot& s);
 
