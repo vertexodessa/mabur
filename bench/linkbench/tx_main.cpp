@@ -73,6 +73,9 @@ struct Args {
   // with rate diffs zeroed, as maburd reads it) + rel. linkbench-rx --wall
   // tallies per cell (docs/findings/2026-09-23-bw40-sweep.md).
   bool no_cca = false;
+  // --wide-igi-floor N: the driver's receive-gain floor while 40 MHz frames
+  // fly (0 = off, as maburd runs an 8822E; -1 = the driver's default).
+  int wide_igi_floor = -1;
   // --foreign-sa: flip the SA/BSSID so a GS books these frames as foreign
   // traffic (interferer role), not own.
   bool foreign_sa = false;
@@ -119,7 +122,7 @@ void usage(const char* argv0) {
     "  [--pwr-mode override|none|offset] [--pwr 0..63] [--pwr-offset-qdb Q]\n"
     "  [--usb-vid 0x0bda] [--usb-pid 0] [--tx-threads 4]\n"
     "  [--ampdu N (max_num, 0=off)] [--ampdu-max-time 32]\n"
-    "  [--no-cca] [--foreign-sa] [--frame-bw 20|40|mix] [--mcs-mix M2] [--no-agg-even] [--duty ON_MS:OFF_MS] [--wall-sweep [--wall-lo -41] [--wall-hi 63] [--wall-frames 100]\n"
+    "  [--no-cca] [--wide-igi-floor N] [--foreign-sa] [--frame-bw 20|40|mix] [--mcs-mix M2] [--no-agg-even] [--duty ON_MS:OFF_MS] [--wall-sweep [--wall-lo -41] [--wall-hi 63] [--wall-frames 100]\n"
     "   [--wall-gap-us 1000] [--wall-settle-ms 20] [--wall-mcs-mask 0xff]]\n"
     "  [--range-sweep [--range-lo -39] [--range-hi 41] [--range-step 2]\n"
     "   [--range-frames 40] [--range-size 1400] [--range-gap-us 2500]\n"
@@ -168,6 +171,7 @@ bool parse_args(int argc, char** argv, Args* a) {
     else if (k == "--ampdu") { if (!next(&a->ampdu)) return false; }
     else if (k == "--ampdu-max-time") { if (!next(&a->ampdu_max_time)) return false; }
     else if (k == "--no-cca") { a->no_cca = true; }
+    else if (k == "--wide-igi-floor") { if (!next(&a->wide_igi_floor)) return false; }
     else if (k == "--foreign-sa") { a->foreign_sa = true; }
     else if (k == "--no-agg-even") { a->no_agg_even = true; }
     else if (k == "--duty") {
@@ -366,6 +370,8 @@ int main(int argc, char** argv) {
   dev_cfg.rx.enable_with_tx = true;  // TX+RX duplex bring-up, as maburd
   dev_cfg.tx.usb_agg_max = 3;        // pack up to 3 frames per bulk-OUT URB
   dev_cfg.tuning.disable_cca = a.no_cca;
+  if (a.wide_igi_floor >= 0)
+    dev_cfg.tuning.wide_tx_igi_floor = static_cast<uint8_t>(a.wide_igi_floor);
 
   WiFiDriver wifi_driver{logger};
   std::unique_ptr<IRtlRadio> dev;  /* Realtek TX-power/A-MPDU controls below */
