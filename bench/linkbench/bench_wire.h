@@ -17,7 +17,7 @@ namespace linkbench {
 // vice versa. Stream ids live in the low 7 bits: bit 7 is kSbiRetxMark
 // (common/include/mabur/sbi.h), so this must stay below 0x80.
 constexpr uint8_t kBenchStreamId = 0x30;
-constexpr size_t kDot11HeaderLen = 24;
+constexpr size_t kDot11HeaderLen = 26;
 
 // Bench app packet: u32 seq LE | u16 len LE | fill, where every fill byte
 // is (0xA5 ^ low byte of seq). len is the TOTAL packet length; RX checks it
@@ -57,12 +57,17 @@ inline bool parse_bench_packet(const uint8_t* p, size_t len, uint32_t* seq,
   return true;
 }
 
-// Canonical probe-req dot11 header (mirrors drone/src/main.cpp
-// build_dot11_header and gs/src/dot11.cpp build_control_frame).
+// The drone's video frame header (mirrors drone/src/radio_tx.cpp
+// write_dot11_header): QoS-Data, TID 0, ack-policy No-Ack. It has to be a
+// data frame for the bench to measure what the video flies: the radio
+// driver sends data frames through the data queue and aggregates only
+// those; a management frame rides another queue with other channel-access
+// timing and is never aggregated.
 inline std::vector<uint8_t> build_dot11_header(uint16_t seq) {
   static constexpr uint8_t kSa[6] = {0x57, 0x42, 0x75, 0x05, 0xd6, 0x00};
   std::vector<uint8_t> h(kDot11HeaderLen, 0);
-  h[0] = 0x40;
+  h[0] = 0x88;
+  h[24] = 0x20;  // QoS ctl low: TID 0, ack-policy [6:5] = 01 (No Ack)
   std::memset(h.data() + 4, 0xff, 6);
   std::memcpy(h.data() + 10, kSa, 6);
   std::memcpy(h.data() + 16, kSa, 6);
