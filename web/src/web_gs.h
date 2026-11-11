@@ -131,6 +131,9 @@ struct Stats {
   std::optional<int64_t> pts_off_us;
   uint64_t bodies = 0, aus_complete = 0, aus_truncated = 0, sends = 0;
   uint64_t aus_truncated_base = 0;   // of aus_truncated: sid 0 (the layer the NACK protects)
+  // Complete sid-0 AUs with a fragment a NACK retransmit delivered
+  // (AuLatMeta::retx_fill): an upper bound on the frames the NACK saved.
+  uint64_t aus_nack_saved = 0;
   // Slice salvage: of aus_truncated, the
   // ones FrameStream rebuilt into a decodable picture (kept slices + fills).
   uint64_t aus_salvaged = 0;
@@ -365,6 +368,7 @@ class WebGs {
   Au cur_;
   uint64_t bodies_ = 0, aus_complete_ = 0, aus_truncated_ = 0, sends_ = 0, rcf_sent_ = 0;
   uint64_t aus_truncated_base_ = 0;
+  uint64_t aus_nack_saved_ = 0;
   uint64_t aus_salvaged_ = 0;
   uint64_t resets_ = 0;
   uint32_t idr_req_ = 0;

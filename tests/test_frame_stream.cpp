@@ -908,3 +908,25 @@ TEST(outage_jump_waits_for_a_second_frame_or_the_gap_timeout) {
   fs.poll(851);
   CHECK(fs.frames_clean() == 13);
 }
+
+TEST(retx_fill_marks_only_a_new_fragment) {
+  // AuLatMeta::retx_fill (WebGs nack_saved): set when a retransmit brings a
+  // fragment the AU did not have, not when it repeats one it had.
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  mabur::Fragmenter frag;
+  std::vector<uint8_t> pay(200, 0x5A);   // two fragments
+  FragArrival direct, retx;
+  retx.retx = true;
+  auto a = frag_frame(frag, 0, pay), b = frag_frame(frag, 1, pay);
+  REQUIRE(a.size() == 2 && b.size() == 2);
+  fs.push_fragment(0, a[0].data(), a[0].size(), 10, direct);
+  fs.push_fragment(0, a[1].data(), a[1].size(), 11, retx);
+  REQUIRE(cap.evs.size() == 2);
+  CHECK(cap.evs[1].complete && cap.evs[1].lat.retx_fill);
+  fs.push_fragment(0, b[1].data(), b[1].size(), 20, direct);
+  fs.push_fragment(0, b[1].data(), b[1].size(), 21, retx);
+  fs.push_fragment(0, b[0].data(), b[0].size(), 22, direct);
+  REQUIRE(cap.evs.size() == 4);
+  CHECK(cap.evs[3].complete && !cap.evs[3].lat.retx_fill);
+}
