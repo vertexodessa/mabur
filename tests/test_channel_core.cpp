@@ -2847,4 +2847,40 @@ TEST(set_width_moves_the_hop_ranker_to_the_new_width) {
   CHECK(g.core->hop_ranker().width_mhz() == 20);
 }
 
+
+// ---- calibration's width hold ----
+
+// A 20 MHz link calibrating 40: the cards go to 40 for the sweep and come
+// back to the link's width after, and the link's own width never moves.
+TEST(set_cal_width_holds_the_cards_at_40_and_gives_them_back) {
+  Rig g(2, 0, /*pinned=*/true, 40, {40, 64, 112, 144}, /*width=*/20);
+  for (int i = 0; i < 10; ++i) g.tick(true, false, 0);
+  REQUIRE(g.core->width_mhz() == 20);
+  for (auto& c : g.cards) c->calls.clear();
+  g.core->set_cal_width(40);
+  CHECK(g.core->width_mhz() == 20);
+  for (auto& c : g.cards) CHECK(c->width_mhz == 40);
+  CHECK(g.sink.has_line("maburgs link: cards 20 -> 40 MHz (calibration)"));
+  // Held through the ticks: the per-tick resync aims at the hold.
+  for (int i = 0; i < 10; ++i) g.tick(true, false, 0);
+  for (auto& c : g.cards) CHECK(c->width_mhz == 40);
+  g.core->set_cal_width(0);
+  for (auto& c : g.cards) CHECK(c->width_mhz == 20);
+  CHECK(g.sink.has_line("maburgs link: cards 40 -> 20 MHz (calibration)"));
+  for (auto& c : g.cards) c->calls.clear();
+  g.core->set_cal_width(0);  // no change: nothing touched
+  for (auto& c : g.cards) CHECK(!called_set_width(*c));
+}
+
+// A link already at 40: the hold changes nothing on the cards.
+TEST(set_cal_width_on_a_40_mhz_link_touches_no_card) {
+  Rig g(2, 0, /*pinned=*/true, 40);
+  for (int i = 0; i < 10; ++i) g.tick(true, false, 0);
+  for (auto& c : g.cards) c->calls.clear();
+  g.core->set_cal_width(40);
+  for (auto& c : g.cards) CHECK(!called_set_width(*c));
+  g.core->set_cal_width(0);
+  for (auto& c : g.cards) CHECK(!called_set_width(*c));
+}
+
 MTEST_MAIN

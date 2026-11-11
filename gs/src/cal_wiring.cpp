@@ -128,8 +128,11 @@ std::vector<std::string> CalNarrator::observe(const CalSnapshot& snap,
       out.push_back("calibration sweep " + k_of_n(i, sweeps.size()) + " " +
                     cal_sweep_token(sweeps[i]) + " done");
   }
-  if (snap.state == CalSession::State::Done)
+  if (snap.state == CalSession::State::Done) {
+    if (!snap.width[1].skipped.empty())
+      out.push_back("calibration 40 MHz uncalibrated: " + snap.width[1].skipped);
     out.push_back("calibration done");
+  }
   else if (snap.state == CalSession::State::Failed)
     out.push_back("calibration failed: " + snap.fail_reason);
   else if (snap.state == CalSession::State::Idle)

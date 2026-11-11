@@ -896,18 +896,19 @@ void ChannelCore::step_width_resync_() {
     }
     const WidthCard wc{fe.ready(), fe.width(), width_tried_[static_cast<size_t>(i)],
                        dwell_busy_.load() && dwell_card_.load() == i, scouting};
-    if (needs_width_fix(wc, width_mhz_)) {
+    const uint8_t want = resync_width_();
+    if (needs_width_fix(wc, want)) {
       width_tried_[static_cast<size_t>(i)] = true;
       std::lock_guard<std::mutex> ilk(inflight_mu_);
       const uint8_t ch = fe.channel();
-      if (fe.set_width(ch, width_mhz_)) {
+      if (fe.set_width(ch, want)) {
         cur_ch_[static_cast<size_t>(i)] = fe.channel();
         tune_gen_[static_cast<size_t>(i)].fetch_add(1, std::memory_order_release);
       } else {
         sink_.log(logf_("maburgs radio: card %d width resync to %u MHz on ch %u failed", i,
-                        static_cast<unsigned>(width_mhz_), static_cast<unsigned>(ch)));
+                        static_cast<unsigned>(want), static_cast<unsigned>(ch)));
         // 40 on a channel with no pair cannot work until the channel changes.
-        if (width_mhz_ != 40 || mabur::ht40_offset(ch) != 0) retry_ms = now_ms_cur_ + kWidthRetryMs;
+        if (want != 40 || mabur::ht40_offset(ch) != 0) retry_ms = now_ms_cur_ + kWidthRetryMs;
       }
     }
     // The scout's dwells, ranks and picks are as wide as its card. Told
@@ -1088,6 +1089,18 @@ void ChannelCore::set_width(uint8_t want) {
     std::lock_guard<std::mutex> ilk(inflight_mu_);
     inflight_->set_width_mhz(want);
   }
+}
+
+void ChannelCore::set_cal_width(uint8_t w) {
+  if (w == cal_width_) return;
+  const uint8_t was = resync_width_();
+  cal_width_ = w;
+  if (resync_width_() == was) return;
+  sink_.log(logf_("maburgs link: cards %u -> %u MHz (calibration)", static_cast<unsigned>(was),
+                  static_cast<unsigned>(resync_width_())));
+  width_tried_.assign(width_tried_.size(), false);
+  std::fill(width_retry_ms_.begin(), width_retry_ms_.end(), 0.0);
+  step_width_resync_();
 }
 
 std::optional<std::string> ChannelCore::set_pin(uint8_t ch) {

@@ -132,6 +132,9 @@ class _Run:
         self.floor_rows = []
         self.floor = None
         self.floor_swept = False
+        # callog 6's N rows: bw -> why that width's remaining sweeps were
+        # skipped (it stays uncalibrated past what applied before).
+        self.skipped = {}
 
     def undetermined(self, wall):
         """True when `wall` is the "no wall could be derived" sentinel for
@@ -183,6 +186,9 @@ class _Run:
             return
         if tag == "L" and len(tok) == 5:
             self.floor = tuple(int(x) for x in tok[1:])
+            return
+        if tag == "N" and len(tok) >= 2:
+            self.skipped[int(tok[1])] = " ".join(tok[2:])
             return
         if tag == "A" and len(tok) >= 3:
             bw = int(tok[1])
@@ -425,6 +431,8 @@ def _render_run_v4(run):
         if ok and reason and reason != "ok":
             lines.append(f"{bw} MHz apply: {reason}")
     lines.extend(_floor_lines(run))
+    for bw, why in sorted(run.skipped.items()):
+        lines.append(f"{bw} MHz uncalibrated: {why}")
     lines.append(_apply_status_line_v4(run))
     return "\n".join(lines)
 
