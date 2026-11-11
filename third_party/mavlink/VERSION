@@ -11,3 +11,8 @@ _mav_put_char_array copy with mav_array_memcpy, not the generator's
 strncpy, because mabur's PARAM_EXT_SET/VALUE/ACK carry raw bytes in a
 char[] field, not a NUL-terminated string. Reapply that patch after
 regenerating.
+
+The MABUR_CAL_KIND_FLOOR and MABUR_CAL_ACK_RESULT_NO_PAIR entries in
+mabur/mabur.h were added by hand from mabur.xml (enum entries only: no
+message layout or CRC_EXTRA changed); a regenerate with the pinned
+pymavlink reproduces them.
