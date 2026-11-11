@@ -30,11 +30,11 @@ namespace maburgs {
 //
 // abandoned also folds in syms_retx: a symbol a NACK retransmit filled
 // (or cascade-solved off a repair row) is video-whole but its direct copy
-// never arrived -- deliberately: the ladder sees the loss,
-// only the video does not. syms_retx has no stale split: a retx filling a
-// pre-transition seq counts as current residual loss even under `cur`
-// (negligible -- the drone only answers seqs within ring_ms, and a
-// transition gap is a handful of symbols).
+// never arrived, and the stats book that as loss. The ladder's own input
+// does not (ladder_residual_counts below). syms_retx has no stale split: a
+// retx filling a pre-transition seq counts as current residual loss even
+// under `cur` (negligible -- the drone only answers seqs within ring_ms,
+// and a transition gap is a handful of symbols).
 ResidualCounts residual_counts(const mabur::UepDecoder& dec, int sid,
                                bool cur) {
   const auto s = dec.stats(sid);
@@ -58,8 +58,18 @@ int delivery_pct(ResidualCounts rc) {
   return static_cast<int>(pct > 100 ? 100 : pct);
 }
 
+// The ladder demotes on what the decoder could not repair, and on nothing
+// else. A symbol a NACK retransmit filled counts as ARRIVED here: the drone
+// answers a request with a burst of resends that race the frame's own FEC
+// repairs, and the ones that land first fill symbols the repairs would have
+// solved a few milliseconds later. Booked as loss, each of them cost a rung
+// on a link that abandons nothing with the NACK off.
 ResidualCounts ladder_residual_counts(const mabur::UepDecoder& dec) {
-  return residual_counts(dec, 0, /*cur=*/true);
+  const auto s = dec.stats(0);
+  const uint64_t abandoned = s.syms_abandoned - s.syms_abandoned_stale;
+  const uint64_t expected =
+      s.syms_delivered + s.syms_recovered + s.syms_retx + abandoned;
+  return ResidualCounts{expected - abandoned, expected};
 }
 
 }  // namespace maburgs

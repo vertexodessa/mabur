@@ -31,8 +31,9 @@ ResidualCounts residual_counts_pooled(const mabur::UepDecoder& dec, bool cur);
 // Post-FEC delivery as a percent in [0,100]; 100 when nothing was expected.
 int delivery_pct(ResidualCounts rc);
 
-// The ladder's block-4 instant-demote input: BASE, current rung. Named
-// separately from residual_counts(dec, 0, true) so the demote path's scope is
+// The ladder's block-4 instant-demote input: BASE, current rung, the
+// decoder's abandonment alone (a retx-filled symbol counts as arrived, unlike
+// in residual_counts). Named separately so the demote path's scope is
 // greppable -- picking the wrong measure here is a bug this has had before.
 ResidualCounts ladder_residual_counts(const mabur::UepDecoder& dec);
 
