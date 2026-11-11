@@ -1,6 +1,6 @@
 # The wide-TX receive-gain floor is per unit — 2026-11-11
 
-**Status:** `radio.wide_tx_igi_floor` is a config key with default 0x35, measured per unit by `maburcal`'s floor sweep. Current: docs/calibration.md "The floor sweep", docs/deploy.md "Supported drone cards", docs/bw40.md
+**Status:** `radio.wide_tx_igi_floor` is a config key with default 0x35; `maburcal`'s floor sweep measures each unit's edge and raises the key for a unit that needs more, never lowering it. Current: docs/calibration.md "The floor sweep", docs/deploy.md "Supported drone cards", docs/bw40.md
 
 Question: why does 40 MHz video on the bench drone (RTL8822E) arrive
 30 ms later than 20 MHz video and lose 1-2 % of its frames, on a link
