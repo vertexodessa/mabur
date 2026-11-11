@@ -123,7 +123,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
   check_known_keys(j, {"usb_vid", "usb_pid", "channels", "width",
                         "power_mode", "tx_threads", "rate_walls_rel_20",
                         "rate_walls_rel_40", "cal_flags_20", "cal_flags_40",
-                        "legacy_wall_rel", "wall_margin_db", "ldpc"},
+                        "legacy_wall_rel", "wall_margin_db", "ldpc",
+                        "wide_tx_igi_floor"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
@@ -160,6 +161,7 @@ void parse_radio(const Value& j, RadioCfg& r) {
 
   assign_if_present(j, "legacy_wall_rel", r.legacy_wall_rel, "radio");
   assign_if_present(j, "wall_margin_db", r.wall_margin_db, "radio");
+  assign_if_present(j, "wide_tx_igi_floor", r.wide_tx_igi_floor, "radio");
 
   if (r.tx_threads < 1 || r.tx_threads > 8)
     fail("radio.tx_threads", "must be in [1,8]");
@@ -174,6 +176,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
     fail("radio.legacy_wall_rel", "must be in [-64,63]");
   if (r.wall_margin_db < 0.0 || r.wall_margin_db > 6.0)
     fail("radio.wall_margin_db", "must be in [0,6]");
+  if (r.wide_tx_igi_floor < 0 || r.wide_tx_igi_floor > 0x7f)
+    fail("radio.wide_tx_igi_floor", "must be in [0,127]");
 
   if (r.power_mode == "offset") {
     const int m = static_cast<int>(std::lround(r.wall_margin_db * 4.0));
