@@ -207,9 +207,10 @@ Probe air cost:
 - One body per AU, so it is a larger share of air at the bottom rungs.
   `link.air_pct` sums streams 0/1 only and cannot see it
   (`docs/airtime-model.md` §6).
-- The probe is one short PPDU while video flies as A-MPDU aggregates, so it
-  underestimates per-aggregate loss. That bias is the remaining fast-fail
-  lever: an SNR floor at the candidate rung, or `rung_offset 2`.
+- With aggregation on (`ampdu.max_num` above 0; the bundle ships 0) the
+  probe is one short PPDU while video flies as A-MPDU aggregates, so it
+  underestimates per-aggregate loss. That bias is a fast-fail lever then:
+  an SNR floor at the candidate rung, or `rung_offset 2`.
 
 The gate does not drive demotes (spec §10). `flightreport.py`'s probe-lead
 report (`docs/observability.md`) is the input a v2 threshold would be tuned
