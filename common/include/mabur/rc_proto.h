@@ -138,6 +138,15 @@ constexpr uint16_t CAP_CALIBRATE = 0x0004;
 // session and gates nothing on it.
 constexpr uint16_t CAP_MAVLINK = 0x0008;
 
+// DiscAck.chip_caps bit: the peer's calibration runs the floor sweep
+// (cal kind 4, mabur/cal_floor.h) and tunes itself to 40 MHz for a run's
+// 40 MHz sweeps, back at the run's end. A bit rather than an RC_VERSION
+// bump: everything else on the wire is unchanged, and a drone without it
+// still calibrates -- the GS just never sends it kind 4 (its decoder would
+// take that for a power sweep) and calibrates 40 MHz only while both ends
+// already fly it.
+constexpr uint16_t CAP_CAL_WIDE = 0x0010;
+
 // Disc.cap_bits bit (GS -> drone, its own namespace): op_width is the GS
 // receiver's width and a proposal. The drone takes it when its own
 // radio.width allows (20 always, 40 only on a 40 config) and retunes with
