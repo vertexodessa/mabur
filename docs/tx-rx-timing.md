@@ -45,7 +45,7 @@ Drone → GS (the downlink, nearly all of the airtime):
 
 | what | cadence | size / air | shaped by |
 |---|---|---|---|
-| video bodies, base (sid 0) + enh (sid 1) | one AU per frame; 60 AU/s at 60 fps SVC-T, alternating base/enh; each AU is one burst | 1405 B bodies (332/bpb 4), aggregated by `[ampdu]` (`max_num` 6, from `min_mcs_20`/`min_mcs_40`) | encoder bitrate (`run_bitrate_policy`), the per-rung FEC overhead pair, MCS, `fec.feed_batch` (bundle 1) |
+| video bodies, base (sid 0) + enh (sid 1) | one AU per frame; 60 AU/s at 60 fps SVC-T, alternating base/enh; each AU is one burst | 1405 B bodies (332/bpb 4), one PPDU each (`[ampdu]` `max_num` 0 in the bundle; above 0 they aggregate from `min_mcs_20`/`min_mcs_40`) | encoder bitrate (`run_bitrate_policy`), the per-rung FEC overhead pair, MCS, `fec.feed_batch` (bundle 1) |
 | probe stream (sid 5) | one body after every video AU while a probe is commanded, i.e. the AU rate | one 1405 B body, its own PPDU right behind the burst's last aggregate | MCS of rung `current + link.probe.rung_offset` (`docs/airtime-model.md` §6) |
 | NACK retransmits (sid 0 symbols) | on a verified `T_NACK` only | pushed at the TxQueue HEAD (`TxQueue::push_front`) | `[nack] air_pct`/`burst_ms` token bucket (`docs/fec-nack.md`) |
 | MSP OSD (sid 4) | `msp.update_rate_hz` 3 | `msp.symbol_size` 1312 B units | not slotted |
