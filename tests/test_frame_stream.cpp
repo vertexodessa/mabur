@@ -828,3 +828,35 @@ TEST(whole_slices_never_use_frame_tail) {
 }
 
 MTEST_MAIN
+
+TEST(frame_id_walk_below_zero_rebases) {
+  // Ids 0, 32768, 0, 65535: deltas of -32768 and -1 walk the unwrapped id
+  // from the first base (0x10000) below zero. That re-bases like a producer
+  // restart; it must not wrap the gap count (dropped) around 2^64.
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  mabur::Fragmenter frag;
+  std::vector<uint8_t> pay(100, 0xAB);
+  uint64_t t = 10;
+  for (uint16_t id : {uint16_t{0}, uint16_t{32768}, uint16_t{0}, uint16_t{65535}})
+    for (auto& p : frag_frame(frag, id, pay)) fs.push_fragment(0, p.data(), p.size(), t++);
+  CHECK(fs.frames_dropped() < 8);
+}
+
+TEST(two_slots_with_one_frame_id_do_not_nest) {
+  // A repeated frame id on another layer: the second slot must not begin
+  // while the first is open (the AU sink would drop the open AU's bytes).
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  mabur::Fragmenter fa, fb;
+  std::vector<uint8_t> pay(400, 0x11);   // three fragments: frame stays open
+  const auto a = frag_frame(fa, 5, pay), b = frag_frame(fb, 5, pay);
+  REQUIRE(a.size() > 1);
+  fs.push_fragment(1, a[0].data(), a[0].size(), 10);
+  fs.push_fragment(0, b[0].data(), b[0].size(), 10);
+  fs.poll(1000);
+  for (size_t i = 1; i < cap.evs.size(); ++i) CHECK(!(cap.evs[i - 1].kind == 'B' && cap.evs[i].kind == 'B'));
+  REQUIRE(cap.evs.size() == 2);   // the first slot's B, E; the twin is late
+  CHECK(cap.evs[0].sid == 1);
+  CHECK(fs.frames_dropped() >= 1);
+}
