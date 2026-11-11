@@ -1259,7 +1259,7 @@ TEST(a_found_floor_is_written_with_its_margin_and_the_run_goes_on) {
   const auto a = as<cal::ApplyCmd>(s.due_mav(30010));
   REQUIRE(a.has_value());
   CHECK(a->has_floor);
-  CHECK(a->floor == 0x28);  // 0x24 + 4 steps
+  CHECK(a->floor == 0x35);  // 0x24 + 4 steps is under the default
   CHECK(!a->has_walls);
   CHECK(!a->has_eff);
   CHECK(a->bw == 40);
@@ -1268,10 +1268,53 @@ TEST(a_found_floor_is_written_with_its_margin_and_the_run_goes_on) {
   CHECK(snap.floor.ran);
   CHECK(snap.floor.have);
   CHECK(snap.floor.rep.floor == 0x24);
-  CHECK(snap.floor.written == 0x28);
+  CHECK(snap.floor.written == 0x35);
+  CHECK(!snap.floor.below_range);
   CHECK(snap.floor.applied);
   CHECK(snap.state == State::AwaitAck);
   CHECK(snap.sweep_i == 1);
+}
+
+TEST(the_written_floor_is_the_edge_plus_margin_never_under_the_default) {
+  CHECK(cal::kFloorDefault == 0x35);
+  CHECK(cal::floor_to_write(0x24) == 0x35);  // needs 0x28: the default stays
+  CHECK(cal::floor_to_write(0x31) == 0x35);
+  CHECK(cal::floor_to_write(0x32) == 0x36);
+  CHECK(cal::floor_to_write(0x34) == 0x38);  // needs more: raised
+  CHECK(cal::floor_to_write(0x7c) == 0x7f);
+  CHECK(cal::floor_to_write(0x7e) == 0x7f);  // clamped to the IGI field
+}
+
+TEST(a_floor_that_passes_at_the_lowest_candidate_reports_no_edge) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(8, {{Kind::Floor, 40}}, 0, &err));
+  REQUIRE(as<cal::SweepCmd>(s.due_mav(0)).has_value());
+  ack(s, 8, 0, 10);
+  s.on_mav(floor_done(8, 0, cal::kFloorLo, 1), 20000);
+  const auto a = as<cal::ApplyCmd>(s.due_mav(20010));
+  REQUIRE(a.has_value());
+  CHECK(a->floor == cal::kFloorDefault);
+  const auto snap = s.snapshot();
+  CHECK(snap.floor.below_range);
+  CHECK(snap.floor.written == 0x35);
+}
+
+TEST(a_unit_that_needs_more_than_the_default_gets_it_raised) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(9, {{Kind::Floor, 40}}, 0, &err));
+  REQUIRE(as<cal::SweepCmd>(s.due_mav(0)).has_value());
+  ack(s, 9, 0, 10);
+  s.on_mav(floor_done(9, 0, 0x34, 11), 60000);
+  const auto a = as<cal::ApplyCmd>(s.due_mav(60010));
+  REQUIRE(a.has_value());
+  CHECK(a->floor == 0x38);
+  CHECK(!s.snapshot().floor.below_range);
 }
 
 TEST(no_passing_floor_writes_nothing_and_says_so) {
@@ -1360,7 +1403,7 @@ TEST(floor_rows_land_in_the_cal_log) {
   CHECK(ls[2] == "S 0 floor 40 4000");
   CHECK(ls[3] == "F 32 0");
   CHECK(ls[4] == "F 34 2484");
-  CHECK(ls[5] == "L 2484 34 100 38");
+  CHECK(ls[5] == "L 2484 34 100 53");  // edge 0x22, the default written
 }
 
 MTEST_MAIN
