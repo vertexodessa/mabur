@@ -158,6 +158,10 @@ SliceFallback SliceAssembler::plan(const ChunkMap& chunks,
       if (st == SliceParse::kUnsupported || st == SliceParse::kDependent) return kSliceFbUnsupported;
       if (st != SliceParse::kOk) return kSliceFbGeometry;
       const uint32_t addr = h.first ? 0 : h.address;
+      // A picture 2^32 CTBs per slice wide (an SPS width of 2^31 at 128 rows)
+      // wraps the span to 0: no slice geometry fits, and the division below
+      // would trap.
+      if (span == 0) return kSliceFbGeometry;
       if (h.first != (addr == 0) || addr % span != 0 || addr / span >= n_ || slices[addr / span])
         return kSliceFbGeometry;
       slices[addr / span] = Slice{std::move(bytes), std::move(h), runs[r].off + s};
