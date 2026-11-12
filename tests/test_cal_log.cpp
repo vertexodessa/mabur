@@ -329,6 +329,7 @@ TEST(floor_rows_list_each_candidate_tried_then_the_result) {
   r.floor = 0x24;
   r.tried = 3;
   r.confirm_pct = 100;
+  r.heard_fps = 3;
   r.min_fps[0] = 0;
   r.min_fps[1] = 2484;
   r.min_fps[2] = 2470;
@@ -344,7 +345,7 @@ TEST(floor_rows_list_each_candidate_tried_then_the_result) {
   CHECK(ls[2] == "F 32 0");
   CHECK(ls[3] == "F 34 2484");
   CHECK(ls[4] == "F 36 2470");
-  CHECK(ls[5] == "L 2484 36 100 53");
+  CHECK(ls[5] == "L 2484 36 100 53 3 0");
 }
 
 

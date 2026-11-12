@@ -56,8 +56,11 @@ struct CapResult;
 //   V <rate> <idx> <pct>                         # one row per verify cell
 //   F <floor> <min_fps>                          # one row per floor candidate
 //                                                # tried: its worst second
-//   L <ref_fps> <found> <confirm_pct> <written>  # one row per floor sweep;
-//                                                # found/written 0 = none
+//   L <ref_fps> <found> <confirm_pct> <written> <heard_fps> <noisy>
+//                                                # one row per floor sweep;
+//                                                # found/written 0 = none,
+//                                                # heard = frames/s the
+//                                                # drone's receiver took
 //   A <bw> <0|1> <reason to end of line>          # one row per apply attempt
 //   N <bw> <why to end of line>                   # the rest of this width's
 //                                                 # sweeps skipped: it stays
@@ -199,8 +202,8 @@ class CalLog {
   void verify(uint8_t rate, int idx, int pct);
   // One floor sweep's result: `F <floor> <min_fps>` per candidate tried
   // (its worst second, frames/s), then `L <ref_fps> <found> <confirm_pct>
-  // <write>` -- found 0 when no value passed, write 0 when nothing is
-  // written.
+  // <write> <heard_fps> <noisy>` -- found 0 when no value passed, write 0
+  // when nothing is written, noisy 1 when the channel was not quiet.
   void floor(const mabur::cal::FloorReport& r, const std::vector<uint8_t>& cands, uint8_t write);
   // One apply attempt's outcome: `A <bw> <0|1> <reason to end of line>`.
   // `reason` keeps its spaces -- this is the last field on the line, so

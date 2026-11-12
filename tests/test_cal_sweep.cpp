@@ -886,7 +886,7 @@ TEST(floor_sweep_skips_a_marginal_value_and_reports_the_edge) {
   CHECK(r.confirm_pct == 100);
   // Reference, 0x20, 0x22 + its confirmation, 0x24 + its confirmation.
   REQUIRE(unit.blasts.size() == 6);
-  CHECK(unit.blasts[0] == std::make_pair(uint8_t{0x7f}, cal::kFloorRefDwellMs));
+  CHECK(unit.blasts[0] == std::make_pair(cal::kFloorRef, cal::kFloorRefDwellMs));
   CHECK(unit.blasts[3] == std::make_pair(uint8_t{0x22}, cal::kFloorConfirmMs));
   for (const auto& p : unit.points) CHECK(p == std::make_pair(cal::kFloorMcs, uint8_t{40}));
   // The sweep ends at the floor the drone flies.
@@ -909,7 +909,205 @@ TEST(floor_sweep_with_no_passing_value_reports_none) {
   const cal::FloorReport r = cal::unpack_floor_done(*done);
   CHECK(r.floor == 0);
   CHECK(r.tried == 12);
+  CHECK(!r.noisy);
   CHECK(unit.floor == 0x35);
+}
+
+// A blast's first second runs about 7 % above the rest. The reference is its
+// dwell's worst second, as a candidate's verdict is, so a healthy floor
+// still passes; a reference that read its first second would fail every
+// candidate (2682 is 93.5 % of 2868).
+TEST(floor_sweep_passes_a_healthy_floor_past_a_blasts_first_second) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  test::FakeFloorUnit unit;
+  unit.full_fps = 2682;
+  unit.first_second_extra_fps = 186;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.ref_fps == 2682);
+  CHECK(r.floor == 0x24);
+  CHECK(r.confirm_pct == 100);
+}
+
+// Other traffic spoils the walk, so a busy channel shows no edge: the walk
+// ends with nothing found and says what the drone heard. The reference
+// point's receiver is deaf and is not asked; the first candidate ends it.
+TEST(floor_sweep_ends_at_the_first_candidate_on_a_busy_channel) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  test::FakeFloorUnit unit;
+  unit.heard_per_s = 190;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.ref_fps == 2484);
+  CHECK(r.floor == 0);
+  CHECK(r.tried == 1);
+  CHECK(r.heard_fps == 190);
+  CHECK(r.noisy);
+  REQUIRE(unit.blasts.size() == 2);
+  CHECK(unit.floor == 0x35);
+}
+
+// Traffic that starts during the walk stops it at that point: the mean
+// over the candidate points flown (400 frames in 8 s) is past the bound.
+TEST(floor_sweep_stops_when_the_channel_turns_busy_mid_walk) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  test::FakeFloorUnit unit;
+  unit.heard_per_s = 100;
+  unit.heard_from = 2;  // the reference and 0x20 in silence, then traffic
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.floor == 0);
+  CHECK(r.tried == 2);
+  CHECK(r.heard_fps == 50);
+  CHECK(r.noisy);
+  REQUIRE(unit.blasts.size() == 3);
+}
+
+// One frame a second does not free a hold (measured) and does not end the
+// walk.
+TEST(floor_sweep_takes_a_trickle_of_frames_for_quiet) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  test::FakeFloorUnit unit;
+  unit.heard_per_s = 1;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.floor == 0x24);
+  CHECK(r.heard_fps == 1);
+  CHECK(!r.noisy);
+}
+
+// Frames the receiver starts on and does not deliver free a held
+// transmitter: 0x20 then sends the full rate and would be reported as the
+// unit's edge. The callback counts none of them; the driver's carrier-sense
+// count does, and the sweep ends with no result.
+TEST(floor_sweep_counts_frames_the_receiver_does_not_deliver) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  test::FakeFloorUnit unit;
+  unit.seen_per_s = 40;
+  unit.seen_frees_the_hold = true;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.floor == 0);
+  CHECK(r.tried == 1);
+  CHECK(r.min_fps[0] == 2484);  // the held floor read as a healthy one
+  CHECK(r.confirm_pct == 100);
+  CHECK(r.heard_fps == 40);
+  CHECK(r.noisy);
+  // The reference, 0x20 and its confirmation.
+  REQUIRE(unit.blasts.size() == 3);
+  CHECK(unit.floor == 0x35);
+}
+
+// The bound on the stretch that decides the value: 5 events a second over
+// the edge's dwell and confirmation still report it, 6 do not.
+TEST(floor_sweep_reports_a_value_only_when_its_own_stretch_was_quiet) {
+  for (uint32_t per_s : {5u, 6u}) {
+    CaptureSink sink;
+    RadioTx tx(sink);
+    FakePowerCtl pwr;
+    test::FakeFloorUnit unit;
+    unit.seen_per_s = per_s;
+    unit.seen_floor = 0x24;
+    CalSweep s(CalSweepCfg{});
+    s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+    REQUIRE(s.take_ack().has_value());
+    run_floor(s, tx, pwr, unit);
+    auto done = s.take_done();
+    REQUIRE(done.has_value());
+    const cal::FloorReport r = cal::unpack_floor_done(*done);
+    CHECK(r.tried == 3);
+    CHECK(r.confirm_pct == 100);
+    CHECK(r.noisy == (per_s == 6));
+    CHECK(r.floor == (per_s == 6 ? 0 : 0x24));
+    // No frame was delivered; a noisy report carries the events.
+    CHECK(r.heard_fps == (per_s == 6 ? 6 : 0));
+  }
+}
+
+// Under the unit's edge the carrier-sense count is no measure of the
+// channel: 0x20 in silence reads a steady 19 a second for seconds on end.
+// It ends nothing; the walk goes on and reports the edge, whose own dwell
+// and confirmation were quiet.
+TEST(floor_sweep_lives_with_events_under_the_edge) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  test::FakeFloorUnit unit;
+  unit.seen_per_s = 19;
+  unit.seen_floor = 0x20;
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.floor == 0x24);
+  CHECK(r.tried == 3);
+  CHECK(!r.noisy);
+  CHECK(r.heard_fps == 0);
+}
+
+// Every candidate fails because a healthy transmitter defers to frames the
+// receiver does not deliver (0x24 under 80 frames/s of 1.8 ms: 86 %). That
+// is not a unit with no usable floor: the last candidate's dwell was not
+// quiet, so the sweep has no result.
+TEST(floor_sweep_with_no_passing_value_under_traffic_has_no_result) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  FakePowerCtl pwr;
+  test::FakeFloorUnit unit;
+  unit.edge = 0x20;
+  unit.seen_per_s = 80;
+  unit.seen_from = 1;  // the reference point is deaf to them and defers to none
+  unit.seen_defers_fps = 348;  // 86 % of 2484 left
+  CalSweep s(CalSweepCfg{});
+  s.on_cmd(cal::make_floor_sweep(7, 0), 0, pwr);
+  REQUIRE(s.take_ack().has_value());
+  run_floor(s, tx, pwr, unit);
+  auto done = s.take_done();
+  REQUIRE(done.has_value());
+  const cal::FloorReport r = cal::unpack_floor_done(*done);
+  CHECK(r.floor == 0);
+  CHECK(r.tried == 12);
+  CHECK(r.min_fps[11] == 2136);
+  CHECK(r.heard_fps == 80);
+  CHECK(r.noisy);
 }
 
 namespace {

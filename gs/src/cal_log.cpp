@@ -160,8 +160,8 @@ void CalLog::floor(const mabur::cal::FloorReport& r, const std::vector<uint8_t>&
     const int n = std::snprintf(b, sizeof(b), "F %d %u", cands[i], r.min_fps[i]);
     if (n > 0) w_.line(s_, b, std::min(static_cast<size_t>(n), sizeof(b) - 1));
   }
-  const int n = std::snprintf(b, sizeof(b), "L %u %d %d %d", r.ref_fps, r.floor,
-                              r.confirm_pct, write);
+  const int n = std::snprintf(b, sizeof(b), "L %u %d %d %d %d %d", r.ref_fps, r.floor,
+                              r.confirm_pct, write, r.heard_fps, r.noisy ? 1 : 0);
   if (n > 0) w_.line(s_, b, std::min(static_cast<size_t>(n), sizeof(b) - 1));
 }
 
