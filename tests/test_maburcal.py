@@ -497,11 +497,11 @@ class TestReportV5(unittest.TestCase):
 GOOD6 = (GOOD5.replace("callog 5", "callog 6", 1)
          .replace("S 3 power 40 20\n",
                   "S 6 floor 40 4000\nF 32 0\nF 34 2484\nF 36 2484\n"
-                  "L 2484 36 100 53\nA 40 1 \nS 3 power 40 20\n"))
+                  "L 2484 36 100 53 1 0\nA 40 1 \nS 3 power 40 20\n"))
 
 GOOD6_NONE = (GOOD5.replace("callog 5", "callog 6", 1)
               .replace("S 3 power 40 20\n",
-                       "S 6 floor 40 4000\nF 32 0\nF 34 0\nL 2484 0 0 0\n"
+                       "S 6 floor 40 4000\nF 32 0\nF 34 0\nL 2484 0 0 0 0 0\n"
                        "S 3 power 40 20\n"))
 
 
@@ -519,7 +519,7 @@ class TestReportV6(unittest.TestCase):
     def test_never_stalled_reports_no_edge(self):
         never = (GOOD5.replace("callog 5", "callog 6", 1)
                  .replace("S 3 power 40 20\n",
-                          "S 6 floor 40 4000\nF 32 2484\nL 2484 32 100 53\n"
+                          "S 6 floor 40 4000\nF 32 2484\nL 2484 32 100 53 0 0\n"
                           "A 40 1 \nS 3 power 40 20\n"))
         self.assertIn("floor40: floor edge none found at or above 0x20, 0x35 written",
                       render(never))
@@ -532,6 +532,16 @@ class TestReportV6(unittest.TestCase):
         out = render(skipped)
         self.assertIn("40 MHz uncalibrated: floor: ch 165 has no 40 MHz pair", out)
         self.assertNotIn("uncalibrated", render(GOOD6))
+
+    def test_a_busy_channel_is_not_a_measurement(self):
+        busy = (GOOD5.replace("callog 5", "callog 6", 1)
+                .replace("S 3 power 40 20\n",
+                         "S 6 floor 40 4000\nL 2862 0 0 0 190 1\nS 3 power 40 20\n"))
+        out = render(busy)
+        self.assertIn("floor40: not measured, the channel is not quiet "
+                      "(the drone heard 190 frames/s); nothing written, "
+                      "the floor in the file stays", out)
+        self.assertNotIn("uncalibrated", out)
 
     def test_no_floor_passed(self):
         out = render(GOOD6_NONE)

@@ -241,6 +241,9 @@ struct FakeCapacityCtl : mabur::CalSweep::CapacityCtl {
   // holds 4 s and slips in the fifth second.
   uint8_t floor_edge = 0x24;
   uint8_t marginal = 0;
+  // Frames/s the drone's receiver takes during a floor point: other
+  // traffic on the channel.
+  uint32_t floor_heard_per_s = 0;
   uint8_t flown_floor = 0x35;  // DeviceCapacityCtl::flown_floor
   uint8_t live_floor = 0x35;
   std::vector<uint8_t> floors_set;
@@ -684,6 +687,7 @@ mabur::BlastResult FakeCapacityCtl::blast(const uint8_t* frame, size_t len, uint
       if (secs > 4) r.per_second[4] = 2130;
     }
     for (uint32_t n : r.per_second) r.offered += n;
+    r.heard = floor_heard_per_s * secs;
     const std::vector<uint8_t> rx = with_fcs(frame, len);
     if (kit->pwr.width == 20) r.per_second.assign(secs, 0);  // a 40 MHz frame cannot air at 20
     for (uint32_t ms = 0; ms < dwell_ms; ++ms) {
@@ -1188,7 +1192,7 @@ TEST(a_floor_sweep_finds_the_edge_past_a_marginal_value_and_keeps_the_default) {
 
 TEST(a_unit_with_no_passing_floor_keeps_its_config) {
   Kit k("floor_none");
-  k.cap.floor_edge = 0x60;  // above every candidate
+  k.cap.floor_edge = 0x40;  // above every candidate, under the reference
   REQUIRE(k.start({{cal::Kind::Floor, 40}}));
   k.run();
   REQUIRE(k.gs.state() == State::Done);
@@ -1242,6 +1246,36 @@ TEST(the_default_plan_calibrates_both_widths_from_a_20_mhz_link) {
   CHECK(c.radio.wide_tx_igi_floor == 0x35);
 }
 
+// The bare start on a channel with other traffic: the floor sweep ends
+// early with no result and no write, and both widths still get their
+// tables at the floor the file holds.
+TEST(a_busy_channel_leaves_the_floor_alone_and_calibrates_both_widths) {
+  Kit k("both_busy");
+  k.link_width = 20;
+  k.pwr.width = 20;
+  k.cap.floor_heard_per_s = 190;
+  const auto plan = maburgs::default_sweeps(20, maburgs::LadderCfg{}, /*peer_wide=*/true);
+  REQUIRE(k.start(plan));
+  k.run();
+  REQUIRE(k.gs.state() == State::Done);
+  if (verbose()) std::printf("  default plan from 20, busy channel: Done at %.1f s\n", k.t / 1000.0);
+  const auto snap = k.gs.snapshot();
+  CHECK(snap.floor.have);
+  CHECK(snap.floor.noisy);
+  CHECK(snap.floor.written == 0);
+  CHECK(snap.floor.note == "the channel is not quiet: the drone heard 190 frames/s");
+  CHECK(snap.width[0].applied);
+  CHECK(snap.width[1].applied);
+  CHECK(snap.width[1].skipped.empty());
+  // The reference's receiver is deaf, so the first candidate is the one
+  // that hears the channel: the reference, 0x20, then the flown floor.
+  for (uint8_t f : k.cap.floors_set) CHECK((f == cal::kFloorRef || f == 0x20 || f == 0x35));
+  k.drain();
+  const auto c = k.loaded();
+  REQUIRE(c.radio.rate_walls_rel_40.has_value());
+  check_walls(*c.radio.rate_walls_rel_40, 40);
+}
+
 // A channel with no 40 MHz pair: the drone acks NoPair, the 40 MHz part is
 // skipped with its reason, and the 20 MHz tables are written.
 TEST(no_pair_keeps_the_20_mhz_results_and_says_why) {
@@ -1273,7 +1307,7 @@ TEST(a_failed_floor_keeps_the_20_mhz_results_and_skips_40) {
   Kit k("floorfail");
   k.link_width = 20;
   k.pwr.width = 20;
-  k.cap.floor_edge = 0x60;
+  k.cap.floor_edge = 0x40;
   REQUIRE(k.start({{cal::Kind::Power, 20}, {cal::Kind::Floor, 40}, {cal::Kind::Power, 40}}));
   k.run();
   REQUIRE(k.gs.state() == State::Done);

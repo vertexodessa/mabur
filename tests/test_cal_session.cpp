@@ -1403,7 +1403,7 @@ TEST(floor_rows_land_in_the_cal_log) {
   CHECK(ls[2] == "S 0 floor 40 4000");
   CHECK(ls[3] == "F 32 0");
   CHECK(ls[4] == "F 34 2484");
-  CHECK(ls[5] == "L 2484 34 100 53");  // edge 0x22, the default written
+  CHECK(ls[5] == "L 2484 34 100 53 0 0");  // edge 0x22, the default written
 }
 
 
@@ -1479,6 +1479,74 @@ TEST(no_floor_passing_skips_the_40_mhz_sweeps_after_it) {
   CHECK(snap.width[0].applied);
   CHECK(snap.width[1].skipped == "floor: no floor passed");
   CHECK(!snap.width[1].have_walls);
+}
+
+// A busy channel shows no edge (the drone's verdict, FloorReport::noisy): the
+// floor result says so, nothing is written, and the 40 MHz sweeps after it
+// run at the floor the drone's file already holds.
+TEST(a_floor_sweep_on_a_busy_channel_writes_nothing_and_40_mhz_goes_on) {
+  CalSession s = wide_session();
+  std::string err;
+  REQUIRE(s.start(47, {{Kind::Power, 20}, {Kind::Floor, 40}, {Kind::Power, 40}}, 0, &err));
+  REQUIRE(pass_power20(s, 47).has_value());
+  ack(s, 47, 1, 100010);
+  cal::FloorReport r;
+  r.ref_fps = 2484;
+  r.heard_fps = 190;
+  r.noisy = true;
+  s.on_mav(cal::pack_floor_done(47, 1, r), 105000);
+  auto snap = s.snapshot();
+  CHECK(snap.floor.have);
+  CHECK(snap.floor.noisy);
+  CHECK(snap.floor.written == 0);
+  CHECK(snap.floor.note == "the channel is not quiet: the drone heard 190 frames/s");
+  CHECK(snap.width[1].skipped.empty());
+  CHECK(snap.state != State::Done);
+  const auto next = as<cal::SweepCmd>(s.due_mav(105010));
+  REQUIRE(next.has_value());
+  CHECK(next->kind == Kind::Power);
+  CHECK(next->bw == 40);
+}
+
+TEST(a_saturated_heard_count_reads_as_a_lower_bound) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(48, {{Kind::Floor, 40}}, 0, &err));
+  REQUIRE(as<cal::SweepCmd>(s.due_mav(0)).has_value());
+  ack(s, 48, 0, 10);
+  cal::FloorReport r;
+  r.ref_fps = 2682;
+  r.tried = 1;
+  r.min_fps[0] = 1635;
+  r.heard_fps = 0xFF;
+  r.noisy = true;
+  s.on_mav(cal::pack_floor_done(48, 0, r), 9000);
+  CHECK(s.snapshot().floor.note == "the channel is not quiet: the drone heard 255 or more frames/s");
+}
+
+// The drone judges the channel, with two bounds the GS does not repeat: a
+// count over either of them in a report that is not marked noisy is a
+// measurement like any other.
+TEST(a_floor_report_is_noisy_only_when_the_drone_says_so) {
+  CalSession s(CalSessionCfg{});
+  s.set_peer(true, true);
+  s.set_peer_wide(true);
+  std::string err;
+  REQUIRE(s.start(49, {{Kind::Floor, 40}}, 0, &err));
+  REQUIRE(as<cal::SweepCmd>(s.due_mav(0)).has_value());
+  ack(s, 49, 0, 10);
+  cal::FloorReport r;
+  r.ref_fps = 2682;
+  r.floor = 0x24;
+  r.tried = 3;
+  r.confirm_pct = 100;
+  r.heard_fps = 8;
+  s.on_mav(cal::pack_floor_done(49, 0, r), 30000);
+  const auto snap = s.snapshot();
+  CHECK(!snap.floor.noisy);
+  CHECK(snap.floor.written == 0x35);
 }
 
 TEST(a_refused_40_mhz_apply_leaves_the_run_done_with_40_uncalibrated) {
