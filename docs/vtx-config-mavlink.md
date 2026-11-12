@@ -137,15 +137,21 @@ column below:
   `RADIO_LDPC` row, which the VTX tab shows under it as a warning
   (`docs/web-gs.md`).
 - **Rebuild** (`VENC_MODE`, `VENC_SLICES`, `REC_ENABLE`,
-  `REC_BITRATE`, `REC_FPS`, `REC_SIZE`, `VENC_MIRROR`, `VENC_FLIP`): the
+  `REC_BITRATE`, `REC_FPS`, `REC_SIZE`, `VENC_MIRROR`, `VENC_FLIP`,
+  `VENC_GOP_S`, `VENC_IREFRESH`): the
   encoder pipeline is rebuilt in-process (`docs/link-adaptation.md`
   "Rebuilding the encoder pipeline in-process"), about 0.5 s plus ~0.1 s
   to the first frame of the new mode. The sensor's orientation is only
   ever programmed as the pipeline starts, both before the sensor is
   enabled and on the VPE channel, so a mirror or flip set is a rebuild
-  too. A recording in progress is stopped first and the record channel
-  is recreated in its bind order; the GS's standing record wish restarts
-  it (`docs/vtx-recorder.md`).
+  too. So is the periodic refresh: the encoder channel takes its GOP
+  length and its intra stripe as it is created. `VENC_GOP_S` and
+  `VENC_IREFRESH` are two sets, in either order; the stripe runs once
+  both are above 0 (`docs/slices.md` "Known limits" for what a refresh
+  start costs the slice split and the SVC-T layering). A recording in
+  progress is stopped first and the record channel is recreated in its
+  bind order; the GS's standing record wish restarts it
+  (`docs/vtx-recorder.md`).
 
 **The rebuild failure ladder.** A rebuild tries the new config
 (`venc_core_restart`); if the pipeline refuses it, the ladder restarts
@@ -217,6 +223,8 @@ quoted string).
 | 14 | `RADIO_PWR_MODE` | `radio.power_mode` | Str | reprogram | TX power table: offset flies the calibrated walls, none the chip's own; none undoes a calibration |
 | 15 | `VENC_MODES` | none (the camera driver's list) | Str | read-only | The camera driver's modes as VENC_MODE values at each mode's full size and top rate, comma-separated; empty until the camera starts |
 | 16 | `VENC_MIN_IQP` | `venc.min_iqp` | Int32 | reprogram | Keyframe quality floor, 0 to 51 (0 = the firmware's own); higher makes keyframes smaller and the moment after each one coarser |
+| 17 | `VENC_GOP_S` | `venc.gop_s` | Real32 | rebuild | Seconds between refresh starts, 0 or 0.5 to 10; 0 = none, the picture heals only when the ground station asks for a keyframe |
+| 18 | `VENC_IREFRESH` | `venc.intra_refresh_frames` | Int32 | rebuild | Frames the intra stripe of a refresh start is spread over, 0 to 255; 0 = a keyframe at each refresh start, 1 = one all-intra picture there; with temporal layering (venc.ref_base above 0) a longer stripe refreshes the top of the picture only; does nothing while VENC_GOP_S is 0 |
 
 "apply" comes from each row's `Apply` value in the table itself
 (`cfgparam::apply_name`, `common/include/mabur/config_params.h`) — how the
