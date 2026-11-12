@@ -201,6 +201,8 @@ void CalSweep::on_cmd(const cal::SweepCmd& c, uint64_t now_ms, PowerCtl& pwr) {
     floor_phase_ = floor_cands_.empty() ? FloorPhase::Done : FloorPhase::Ref;
     floor_i_ = 0;
     floor_confirms_ = 0;
+    floor_walk_ = FloorAir{};
+    floor_edge_ = FloorAir{};
     floor_report_ = cal::FloorReport{};
   }
   // The first cell does not open until 200 ms from now (pump_power_verify
@@ -510,15 +512,50 @@ void CalSweep::pump_floor(uint64_t now_ms, CapacityCtl& cap) {
   offered_[cal::kFloorMcs] += r.offered;
   cell_entered_ = false;
   const uint32_t worst = cal::floor_min_second(r.per_second);
+  // Other traffic on the channel spoils the walk (cal_floor.h
+  // kFloorQuietMaxHeardPerS). The reference point's receiver is deaf and
+  // stays out of the count.
+  if (floor_phase_ == FloorPhase::Cand) floor_edge_ = FloorAir{};
+  if (floor_phase_ != FloorPhase::Ref) {
+    floor_walk_.add(r, dwell);
+    floor_edge_.add(r, dwell);
+  }
+  floor_report_.heard_fps = floor_walk_.delivered();
+  const auto end_noisy = [&](uint8_t rate) {
+    floor_report_.noisy = true;
+    floor_report_.floor = 0;
+    floor_report_.heard_fps = rate;
+    floor_phase_ = FloorPhase::Done;
+  };
+  // The walk's last word, a value or none: it stands only when the stretch
+  // that decided it was quiet by the receiver's events too. A held
+  // transmitter that frame starts keep free reads as a healthy one, and a
+  // healthy one that defers to them reads as held.
+  const auto end_walk = [&](uint8_t found) {
+    if (floor_edge_.events() > cal::kFloorQuietMaxHeardPerS) {
+      end_noisy(floor_edge_.events());
+      return;
+    }
+    floor_report_.floor = found;
+    floor_phase_ = FloorPhase::Done;
+  };
+  // Frames delivered: no point from here on would show the unit's edge.
+  const bool busy = floor_report_.heard_fps > cal::kFloorQuietMaxHeardPerS;
   switch (floor_phase_) {
     case FloorPhase::Ref:
-      floor_report_.ref_fps = cal::floor_ref_rate(r.per_second);
+      // The same statistic a candidate is judged by (cal_floor.h
+      // kFloorRefDwellMs).
+      floor_report_.ref_fps = worst;
       // Nothing to compare a candidate against: the sweep has no answer.
       floor_phase_ = floor_report_.ref_fps ? FloorPhase::Cand : FloorPhase::Done;
       return;
     case FloorPhase::Cand:
       floor_report_.min_fps[floor_i_] = static_cast<uint16_t>(std::min<uint32_t>(worst, 0xFFFF));
       floor_report_.tried = static_cast<uint8_t>(floor_i_ + 1);
+      if (busy) {
+        end_noisy(floor_report_.heard_fps);
+        return;
+      }
       if (cal::floor_seconds_pass(r.per_second, floor_report_.ref_fps)) {
         floor_phase_ = FloorPhase::Confirm;
         return;
@@ -527,15 +564,18 @@ void CalSweep::pump_floor(uint64_t now_ms, CapacityCtl& cap) {
     case FloorPhase::Confirm:
       floor_report_.confirm_pct = static_cast<uint8_t>(std::min<uint64_t>(
           100, static_cast<uint64_t>(worst) * 100 / floor_report_.ref_fps));
+      if (busy) {
+        end_noisy(floor_report_.heard_fps);
+        return;
+      }
       if (cal::floor_seconds_pass(r.per_second, floor_report_.ref_fps)) {
-        floor_report_.floor = floor_cands_[floor_i_];
-        floor_phase_ = FloorPhase::Done;
+        end_walk(floor_cands_[floor_i_]);
         return;
       }
       // Passed its dwell, failed the longer one: marginal. Go on upward,
       // a bounded number of times.
       if (++floor_confirms_ >= cal::kFloorMaxConfirms) {
-        floor_phase_ = FloorPhase::Done;
+        end_walk(0);
         return;
       }
       floor_phase_ = FloorPhase::Cand;
@@ -543,7 +583,7 @@ void CalSweep::pump_floor(uint64_t now_ms, CapacityCtl& cap) {
     case FloorPhase::Done:
       return;
   }
-  if (++floor_i_ >= floor_cands_.size()) floor_phase_ = FloorPhase::Done;
+  if (++floor_i_ >= floor_cands_.size()) end_walk(0);
 }
 
 void CalSweep::finish_sweep(uint64_t now_ms) {

@@ -546,6 +546,10 @@ void CalSession::finish_sweep(uint64_t now_ms) {
                                                      : analyze_capacity_sweep();
   if (apply)
     begin_apply(now_ms);
+  else if (cmd_.kind == cal::Kind::Floor && floor_.noisy)
+    // Nothing stalled and the floor in the drone's file is still in force:
+    // the 40 MHz sweeps after it measure the link as it flies.
+    next_sweep(now_ms);
   else if (cmd_.kind == cal::Kind::Floor)
     // Without a floor that holds, the 40 MHz sweeps after it would measure
     // a transmitter that stalls: the 40 MHz part stops here.
@@ -672,9 +676,15 @@ bool CalSession::analyze_floor() {
   }
   floor_.have = true;
   floor_.rep = cal::unpack_floor_done(*done_);
-  if (floor_.rep.ref_fps == 0)
+  if (floor_.rep.ref_fps == 0) {
     floor_.note = "the reference point sent nothing";
-  else if (floor_.rep.floor == 0)
+  } else if (floor_.rep.noisy) {
+    floor_.noisy = true;
+    // The report's byte saturates at 0xFF.
+    floor_.note = std::string("the channel is not quiet: the drone heard ") +
+                  (floor_.rep.heard_fps == 0xFF ? "255 or more" : std::to_string(floor_.rep.heard_fps)) +
+                  " frames/s";
+  } else if (floor_.rep.floor == 0)
     floor_.note = "no floor passed";
   else {
     floor_.below_range = !floor_.cands.empty() && floor_.rep.floor == floor_.cands.front();
