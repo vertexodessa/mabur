@@ -76,9 +76,28 @@ struct Args {
   // --wide-igi-floor N: the driver's receive-gain floor while 40 MHz frames
   // fly (0 = off, as maburd runs an 8822E; -1 = the driver's default).
   int wide_igi_floor = -1;
+  // --wide-igi-floor-at N [--wide-igi-floor-at-s S]: change the floor to N
+  // S seconds into the run (default 2) through the runtime setter, the way
+  // maburd's floor sweep moves it under a running sender.
+  int wide_igi_floor_at = -1;
+  int wide_igi_floor_at_s = 2;
+  // --log-info: the driver's info lines (dig, edcca, dumps) on stderr.
+  // --dump-at S (up to 4): the driver's chip-state and MAC register dumps S
+  // seconds into the run. --retune-at S: set the same channel again.
+  // --no-cancel: data sends wait on the chip without a timeout, as maburd's do.
+  bool no_cancel = false;
+  bool log_info = false;
+  int dump_at[4] = {-1, -1, -1, -1};
+  int n_dump = 0;
+  int retune_at = -1;
   // --foreign-sa: flip the SA/BSSID so a GS books these frames as foreign
   // traffic (interferer role), not own.
   bool foreign_sa = false;
+  // --inject-fps N [--inject-size B]: nothing but one frame of B body bytes
+  // every 1/N s at --mcs and --bw. The paced run's token bucket sends a low
+  // rate in bursts; this is an interferer of a known, even frame rate.
+  int inject_fps = 0;
+  int inject_size = 200;
   // --frame-bw 20|40|mix: per-frame radiotap width, independent of the
   // tuning width --bw (0 = same as --bw). mix alternates 20/40 per frame.
   // 20-in-40 tests that a 40-tuned radio airs 20 MHz PPDUs on the primary.
@@ -122,7 +141,7 @@ void usage(const char* argv0) {
     "  [--pwr-mode override|none|offset] [--pwr 0..63] [--pwr-offset-qdb Q]\n"
     "  [--usb-vid 0x0bda] [--usb-pid 0] [--tx-threads 4]\n"
     "  [--ampdu N (max_num, 0=off)] [--ampdu-max-time 32]\n"
-    "  [--no-cca] [--wide-igi-floor N] [--foreign-sa] [--frame-bw 20|40|mix] [--mcs-mix M2] [--no-agg-even] [--duty ON_MS:OFF_MS] [--wall-sweep [--wall-lo -41] [--wall-hi 63] [--wall-frames 100]\n"
+    "  [--no-cca] [--wide-igi-floor N] [--wide-igi-floor-at N [--wide-igi-floor-at-s S]] [--no-cancel] [--log-info] [--dump-at S] [--retune-at S] [--foreign-sa] [--inject-fps N [--inject-size B]] [--frame-bw 20|40|mix] [--mcs-mix M2] [--no-agg-even] [--duty ON_MS:OFF_MS] [--wall-sweep [--wall-lo -41] [--wall-hi 63] [--wall-frames 100]\n"
     "   [--wall-gap-us 1000] [--wall-settle-ms 20] [--wall-mcs-mask 0xff]]\n"
     "  [--range-sweep [--range-lo -39] [--range-hi 41] [--range-step 2]\n"
     "   [--range-frames 40] [--range-size 1400] [--range-gap-us 2500]\n"
@@ -172,7 +191,15 @@ bool parse_args(int argc, char** argv, Args* a) {
     else if (k == "--ampdu-max-time") { if (!next(&a->ampdu_max_time)) return false; }
     else if (k == "--no-cca") { a->no_cca = true; }
     else if (k == "--wide-igi-floor") { if (!next(&a->wide_igi_floor)) return false; }
+    else if (k == "--wide-igi-floor-at") { if (!next(&a->wide_igi_floor_at)) return false; }
+    else if (k == "--wide-igi-floor-at-s") { if (!next(&a->wide_igi_floor_at_s)) return false; }
+    else if (k == "--log-info") { a->log_info = true; }
+    else if (k == "--no-cancel") { a->no_cancel = true; }
+    else if (k == "--dump-at") { if (a->n_dump >= 4 || !next(&a->dump_at[a->n_dump])) return false; ++a->n_dump; }
+    else if (k == "--retune-at") { if (!next(&a->retune_at)) return false; }
     else if (k == "--foreign-sa") { a->foreign_sa = true; }
+    else if (k == "--inject-fps") { if (!next(&a->inject_fps)) return false; }
+    else if (k == "--inject-size") { if (!next(&a->inject_size)) return false; }
     else if (k == "--no-agg-even") { a->no_agg_even = true; }
     else if (k == "--duty") {
       if (i + 1 >= argc) return false;
@@ -221,6 +248,11 @@ bool parse_args(int argc, char** argv, Args* a) {
        a->range_size > 2000 || (a->range_bw_mask & ~3) || !a->range_bw_mask ||
        ((a->range_bw_mask & 2) && a->bw != 40))) {
     std::fprintf(stderr, "error: bad --range-* (40 MHz rows need --bw 40)\n");
+    return false;
+  }
+  if (a->inject_fps < 0 || a->inject_fps > 1000 || a->inject_size < 16 ||
+      a->inject_size > 2000) {
+    std::fprintf(stderr, "error: --inject-fps in [1, 1000], --inject-size in [16, 2000]\n");
     return false;
   }
   if (a->mcs_mix >= 0 && a->frame_bw != 0) {
@@ -340,7 +372,7 @@ int main(int argc, char** argv) {
   // flush-per-line). Without the disable(), jaguar3's per-URB "tx.agg" event
   // is one fwrite+fflush per bulk-OUT on the TX hot path — noise in the
   // measurement and ~1.5 MB/min of log for a run nothing here parses.
-  logger->set_level(Logger::Level::Warn);
+  logger->set_level(a.log_info ? Logger::Level::Info : Logger::Level::Warn);
   logger->events().disable();
 
   libusb_context* usb_ctx = nullptr;
@@ -370,6 +402,7 @@ int main(int argc, char** argv) {
   dev_cfg.rx.enable_with_tx = true;  // TX+RX duplex bring-up, as maburd
   dev_cfg.tx.usb_agg_max = 3;        // pack up to 3 frames per bulk-OUT URB
   dev_cfg.tuning.disable_cca = a.no_cca;
+  dev_cfg.tx.no_cancel_multipkt = a.no_cancel;
   if (a.wide_igi_floor >= 0)
     dev_cfg.tuning.wide_tx_igi_floor = static_cast<uint8_t>(a.wide_igi_floor);
 
@@ -529,11 +562,106 @@ int main(int argc, char** argv) {
     g_devourer_should_stop = true;
   };
 
+  // Every frame the receive callback saw: what frees a held transmitter is
+  // read against this.
+  std::atomic<uint64_t> rx_heard{0};
+  // Sum of the stronger chain's raw RSSI over those frames (dBm = raw - 110).
+  std::atomic<uint64_t> rx_level{0};
+
+  auto inject = [&] {
+    const std::vector<uint8_t> rt = devourer::build_stream_radiotap(mode);
+    const std::vector<uint8_t> body(static_cast<size_t>(a.inject_size), 0xA5);
+    const uint64_t gap_us = 1'000'000 / static_cast<uint64_t>(a.inject_fps);
+    uint16_t mac_seq = 0;
+    uint64_t sent = 0, fail = 0, iv_sent0 = 0, iv_fail0 = 0, iv_rx0 = 0;
+    const uint64_t t0 = mono_us();
+    const uint64_t deadline =
+        a.time_s > 0 ? t0 + static_cast<uint64_t>(a.time_s) * 1'000'000 : 0;
+    uint64_t due = t0, next_stats = t0 + 1'000'000;
+    while (!g_devourer_should_stop) {
+      uint64_t now = mono_us();
+      if (deadline && now >= deadline) break;
+      if (now >= next_stats) {
+        next_stats += 1'000'000;
+        const uint64_t rx = rx_heard.load();
+        std::fprintf(stderr, "[%3llus] inject frm %llu fail %llu | rx %llu\n",
+                     static_cast<unsigned long long>((now - t0) / 1'000'000),
+                     static_cast<unsigned long long>(sent - iv_sent0),
+                     static_cast<unsigned long long>(fail - iv_fail0),
+                     static_cast<unsigned long long>(rx - iv_rx0));
+        iv_sent0 = sent;
+        iv_fail0 = fail;
+        iv_rx0 = rx;
+      }
+      if (now < due) {
+        std::this_thread::sleep_for(
+            std::chrono::microseconds(std::min(due, next_stats) - now));
+        continue;
+      }
+      std::vector<uint8_t> f;
+      f.reserve(rt.size() + kDot11HeaderLen + body.size());
+      f.insert(f.end(), rt.begin(), rt.end());
+      auto hdr = build_dot11_header(mac_seq);
+      if (a.foreign_sa) { hdr[15] ^= 0xFF; hdr[21] ^= 0xFF; }
+      mac_seq = static_cast<uint16_t>((mac_seq + 1) & 0x0FFF);
+      f.insert(f.end(), hdr.begin(), hdr.end());
+      f.insert(f.end(), body.begin(), body.end());
+      if (dev->send_packet(f.data(), f.size())) ++sent; else ++fail;
+      // A send that blocked past its slot is not made up in a burst.
+      now = mono_us();
+      due = due + 2 * gap_us < now ? now : due + gap_us;
+    }
+    std::fprintf(stderr, "inject done: %llu sent, %llu fail\n",
+                 static_cast<unsigned long long>(sent),
+                 static_cast<unsigned long long>(fail));
+    g_devourer_should_stop = true;
+  };
+
+  // One timeline thread for the mid-run probes: floor change, retune, dumps.
+  std::thread timeline;
+  if (a.wide_igi_floor_at >= 0 || a.n_dump > 0 || a.retune_at >= 0)
+    timeline = std::thread([&] {
+      const auto t0 = std::chrono::steady_clock::now();
+      bool floor_done = a.wide_igi_floor_at < 0, retune_done = a.retune_at < 0;
+      bool dumped[4] = {false, false, false, false};
+      while (!g_devourer_should_stop) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const double el = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        if (!floor_done && el >= a.wide_igi_floor_at_s) {
+          floor_done = true;
+          const bool ok = dev->SetWideTxIgiFloor(static_cast<uint8_t>(a.wide_igi_floor_at));
+          std::fprintf(stderr, "floor -> 0x%02x at %d s (%s)\n",
+                       static_cast<unsigned>(a.wide_igi_floor_at), a.wide_igi_floor_at_s,
+                       ok ? "ok" : "refused");
+        }
+        if (!retune_done && el >= a.retune_at) {
+          retune_done = true;
+          dev->SetMonitorChannel(a.bw == 40
+              ? SelectedChannel{static_cast<uint8_t>(a.channel), mabur::ht40_offset(static_cast<uint8_t>(a.channel)), CHANNEL_WIDTH_40}
+              : SelectedChannel{static_cast<uint8_t>(a.channel), 0, CHANNEL_WIDTH_20});
+          std::fprintf(stderr, "retune at %d s done\n", a.retune_at);
+        }
+        for (int i = 0; i < a.n_dump; ++i)
+          if (!dumped[i] && el >= a.dump_at[i]) {
+            dumped[i] = true;
+            std::fprintf(stderr, "=== dump at %d s ===\n", a.dump_at[i]);
+            try {
+              dev->DumpChipState();
+              dev->DumpMacRegisters();
+            } catch (const std::exception& ex) {
+              std::fprintf(stderr, "dump failed: %s\n", ex.what());
+            }
+            std::fprintf(stderr, "=== dump end %d s ===\n", a.dump_at[i]);
+          }
+      }
+    });
+
   // TX hot loop in its own thread; main blocks in StartRxLoop (which
   // watches g_devourer_should_stop) exactly like maburd.
   std::thread tx_thread([&] {
     if (a.wall_sweep) { wall_sweep(); return; }
     if (a.range_sweep) { range_sweep(); return; }
+    if (a.inject_fps > 0) { inject(); return; }
     // Random initial seq: a restarted linkbench-tx re-sending seq 0 within
     // SwDecoder's kResetSpan of the previous run's seqs is otherwise
     // dropped as stale for that run's lifetime (final-review Critical, see
@@ -554,7 +682,7 @@ int main(int argc, char** argv) {
     uint16_t mac_seq = 0;
     uint64_t app_bytes = 0, air_bytes = 0;
     uint64_t iv_app = 0, iv_air = 0, iv_src0 = 0;
-    uint64_t iv_frm0 = 0, iv_fail0 = 0;
+    uint64_t iv_frm0 = 0, iv_fail0 = 0, iv_rx0 = 0;
     const uint64_t t0 = mono_us();
     uint64_t next_stats = t0 + 1'000'000;
     const uint64_t deadline =
@@ -601,6 +729,39 @@ int main(int argc, char** argv) {
         }
       });
     }
+
+    // The pacing loop blocks on a full queue and reaches its stats line once
+    // per burst (125 ms at 2800 frames/s), so that line's second is up to a
+    // burst long or short. This one is cut on the second.
+    std::atomic<bool> sec_done{false};
+    std::thread sec([&] {
+      uint64_t f0 = 0, x0 = 0, r0 = 0, l0 = 0;
+      RxActivity a0 = dev->GetRxActivity();
+      for (uint64_t k = 1; !sec_done; ++k) {
+        const uint64_t at = t0 + k * 1'000'000;
+        while (!sec_done && mono_us() < at)
+          std::this_thread::sleep_for(std::chrono::microseconds(
+              std::min<uint64_t>(5000, at - std::min(at, mono_us())) + 1));
+        if (sec_done) break;
+        const uint64_t f = frames_ok.load(), x = frames_fail.load(), r = rx_heard.load();
+        const uint64_t l = rx_level.load();
+        const RxActivity act = dev->GetRxActivity();
+        // level: the heard frames' mean, 0 when none was heard. cca / fa /
+        // win: what the driver's gain-control pass added in this second (it
+        // runs about every 2 s, so every other line reads 0 over 0 ms).
+        std::fprintf(stderr,
+                     "[%3llus] sent %llu fail %llu heard %llu level %d dBm cca %llu fa %llu win %llu ms\n",
+                     static_cast<unsigned long long>(k),
+                     static_cast<unsigned long long>(f - f0),
+                     static_cast<unsigned long long>(x - x0),
+                     static_cast<unsigned long long>(r - r0),
+                     r > r0 ? static_cast<int>((l - l0) / (r - r0)) - 110 : 0,
+                     static_cast<unsigned long long>(act.cca - a0.cca),
+                     static_cast<unsigned long long>(act.fa - a0.fa),
+                     static_cast<unsigned long long>((act.window_us - a0.window_us) / 1000));
+        f0 = f; x0 = x; r0 = r; l0 = l; a0 = act;
+      }
+    });
 
     std::vector<std::vector<uint8_t>> bodies;
     std::vector<std::vector<uint8_t>> frames;  // built, pending enqueue
@@ -658,18 +819,20 @@ int main(int argc, char** argv) {
         const uint64_t src = pipe.sources_sent();
         const uint64_t frm = frames_ok.load(), fail = frames_fail.load();
         std::fprintf(stderr,
-                     "[%3llus] app %.2fM air %.2fM | frm %llu fail %llu | src %llu%s\n",
+                     "[%3llus] app %.2fM air %.2fM | frm %llu fail %llu | src %llu | rx %llu%s\n",
                      static_cast<unsigned long long>(t), iv_app * 8.0 / 1e6,
                      iv_air * 8.0 / 1e6,
                      static_cast<unsigned long long>(frm - iv_frm0),
                      static_cast<unsigned long long>(fail - iv_fail0),
                      static_cast<unsigned long long>(src - iv_src0),
+                     static_cast<unsigned long long>(rx_heard.load() - iv_rx0),
                      iv_app * 8.0 < a.bitrate_bps * 0.95 ? "  ** under target **"
                                                          : "");
         iv_app = iv_air = 0;
         iv_frm0 = frm;
         iv_fail0 = fail;
         iv_src0 = src;
+        iv_rx0 = rx_heard.load();
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -684,6 +847,8 @@ int main(int argc, char** argv) {
     }
     q_fill.notify_all();
     for (auto& s : senders) s.join();
+    sec_done = true;
+    sec.join();
     const double dur = (mono_us() - t0) / 1e6;
     std::fprintf(stderr,
                  "done: %.1fs, %llu pkts (%.2f Mbps app), %llu frames "
@@ -700,10 +865,15 @@ int main(int argc, char** argv) {
     g_devourer_should_stop = true;
   });
 
-  dev->StartRxLoop([](const Packet&) {});  // blocks until stop flag
+  dev->StartRxLoop([&](const Packet& pkt) {  // blocks until stop flag
+    rx_heard.fetch_add(1, std::memory_order_relaxed);
+    rx_level.fetch_add(std::max(pkt.RxAtrib.rssi[0], pkt.RxAtrib.rssi[1]),
+                       std::memory_order_relaxed);
+  });
 
   g_devourer_should_stop = true;
   if (tx_thread.joinable()) tx_thread.join();
+  if (timeline.joinable()) timeline.join();
   dev->Stop();
   libusb_release_interface(handle, 0);
   libusb_close(handle);
