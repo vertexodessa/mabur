@@ -17,6 +17,24 @@ struct FakeFloorUnit : CalSweep::CapacityCtl {
   uint8_t edge = 0x24;
   uint8_t marginal = 0;  // 0 = none
   uint32_t full_fps = 2484;
+  // Frames a blast's first second runs above the rest while the send queue
+  // fills (0 = a flat rate): 2868 then 2682 on one RTL8822E.
+  uint32_t first_second_extra_fps = 0;
+  // Frames/s the receiver delivers during a blast (other traffic on the
+  // channel), from the `heard_from` blast on.
+  uint32_t heard_per_s = 0;
+  size_t heard_from = 0;
+  // Carrier-sense events a second the driver counts during a blast, frames
+  // the receiver starts on and does not deliver: from the `seen_from` blast
+  // on, and at `seen_floor` only when that is set.
+  uint32_t seen_per_s = 0;
+  size_t seen_from = 0;
+  uint8_t seen_floor = 0;
+  // Those events free a held transmitter (a floor under the edge then sends
+  // the full rate), as 40 undelivered frames/s do on one RTL8822E.
+  bool seen_frees_the_hold = false;
+  // Frames/s a healthy floor loses to carrier sense while they are counted.
+  uint32_t seen_defers_fps = 0;
   uint32_t marginal_worst_fps = 2130;
   // Configured floor, put back by restore_wide_floor().
   uint8_t flown = 0x35;
@@ -47,9 +65,16 @@ struct FakeFloorUnit : CalSweep::CapacityCtl {
     blasts.emplace_back(floor, dwell_ms);
     BlastResult r;
     const uint32_t secs = dwell_ms / 1000;
+    if (blasts.size() > heard_from) r.heard = heard_per_s * secs;
+    const bool seen_now =
+        seen_per_s != 0 && blasts.size() > seen_from && (seen_floor == 0 || floor == seen_floor);
+    // A radio that has the count reports its window for every blast.
+    if (seen_per_s != 0) r.seen_ms = dwell_ms;
+    if (seen_now) r.seen = seen_per_s * secs;
     r.per_second.assign(secs, 0);
-    if (floor >= edge) {
-      r.per_second.assign(secs, full_fps);
+    if (floor >= edge || (seen_now && seen_frees_the_hold)) {
+      r.per_second.assign(secs, full_fps - (seen_now ? seen_defers_fps : 0));
+      if (secs > 0) r.per_second[0] += first_second_extra_fps;
     } else if (marginal != 0 && floor == marginal) {
       r.per_second.assign(secs, full_fps);
       // Holds through 4 s, slips in the fifth.
