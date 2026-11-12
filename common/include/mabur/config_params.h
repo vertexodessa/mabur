@@ -71,6 +71,12 @@ inline constexpr Row kTable[] = {
      "The camera driver's modes as VENC_MODE values at each mode's full size and top rate, comma-separated; empty until the camera starts"},
     {"VENC_MIN_IQP", "venc", "min_iqp", Type::Int32, Apply::Reprogram,
      "Keyframe quality floor, 0 to 51 (0 = the firmware's own); higher makes keyframes smaller and the moment after each one coarser"},  // the encoder's rate control, in place
+    // The periodic refresh, a pair: the period and what a refresh start is.
+    // The encoder channel takes both when it is created.
+    {"VENC_GOP_S", "venc", "gop_s", Type::Real32, Apply::Rebuild,
+     "Seconds between refresh starts, 0 or 0.5 to 10; 0 = none, the picture heals only when the ground station asks for a keyframe"},
+    {"VENC_IREFRESH", "venc", "intra_refresh_frames", Type::Int32, Apply::Rebuild,
+     "Frames the intra stripe of a refresh start is spread over, 0 to 255; 0 = a keyframe at each refresh start, 1 = one all-intra picture there; with temporal layering (venc.ref_base above 0) a longer stripe refreshes the top of the picture only; does nothing while VENC_GOP_S is 0"},
 };
 inline constexpr size_t kCount = sizeof(kTable) / sizeof(kTable[0]);
 inline constexpr int kMaxIdLen = 16;

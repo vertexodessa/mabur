@@ -207,12 +207,12 @@ TEST(every_row_has_the_path_from_the_table) {
   using P = ConfigApplyPath;
   // VENC_MODES (read-only) maps to Rebuild only for completeness: patch_row
   // refuses every set of it, so nothing is ever applied on that path.
-  const ConfigApplyPath want[17] = {P::Reprogram, P::Reprogram, P::Rebuild, P::Rebuild,
+  const ConfigApplyPath want[19] = {P::Reprogram, P::Reprogram, P::Rebuild, P::Rebuild,
                               P::Knob,      P::Knob,      P::Rebuild, P::Rebuild,
                               P::Rebuild,   P::Rebuild,   P::Knob,    P::Reprogram,
                               P::Rebuild,   P::Rebuild,   P::Reprogram, P::Rebuild,
-                              P::Reprogram};
-  REQUIRE(cfgparam::kCount == 17);
+                              P::Reprogram, P::Rebuild,   P::Rebuild};
+  REQUIRE(cfgparam::kCount == 19);
   for (size_t i = 0; i < cfgparam::kCount; ++i) CHECK(apply_path_for(i) == want[i]);
 }
 

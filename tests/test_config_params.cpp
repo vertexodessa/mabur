@@ -5,7 +5,7 @@
 #include <string>
 using namespace mabur::cfgparam;
 TEST(sixteen_rows_in_spec_order) {
-  REQUIRE(kCount == 17);
+  REQUIRE(kCount == 19);
   CHECK(!std::strcmp(kTable[0].id, "RADIO_WALL_MARGN") && !std::strcmp(kTable[0].section, "radio") && !std::strcmp(kTable[0].key, "wall_margin_db") && kTable[0].type == Type::Real32);
   CHECK(!std::strcmp(kTable[1].id, "RADIO_LDPC")     && kTable[1].type == Type::Bool);
   CHECK(!std::strcmp(kTable[2].id, "VENC_MODE")      && kTable[2].type == Type::Str);
@@ -23,6 +23,8 @@ TEST(sixteen_rows_in_spec_order) {
   CHECK(!std::strcmp(kTable[14].id, "RADIO_PWR_MODE") && !std::strcmp(kTable[14].key, "power_mode") && kTable[14].type == Type::Str);
   CHECK(!std::strcmp(kTable[15].id, "VENC_MODES") && kTable[15].type == Type::Str && kTable[15].apply == Apply::ReadOnly);
   CHECK(!std::strcmp(kTable[16].id, "VENC_MIN_IQP") && kTable[16].type == Type::Int32 && kTable[16].apply == Apply::Reprogram);
+  CHECK(!std::strcmp(kTable[17].id, "VENC_GOP_S") && !std::strcmp(kTable[17].section, "venc") && !std::strcmp(kTable[17].key, "gop_s") && kTable[17].type == Type::Real32 && kTable[17].apply == Apply::Rebuild);
+  CHECK(!std::strcmp(kTable[18].id, "VENC_IREFRESH") && !std::strcmp(kTable[18].key, "intra_refresh_frames") && kTable[18].type == Type::Int32 && kTable[18].apply == Apply::Rebuild);
   CHECK(kVencModeRow == 2 && kVencModesRow == 15);
   CHECK(find("VENC_MODE") == 2);
   CHECK(find("VENC_FPS") == -1);
