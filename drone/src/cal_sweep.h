@@ -87,6 +87,16 @@ struct BlastResult {
   // Frames sent in each whole second of the dwell, by when the send
   // returned; a Floor point is judged on its worst second (cal_floor.h).
   std::vector<uint32_t> per_second;
+  // Frames the receiver delivered during the dwell, of any sender and with
+  // or without a clean CRC; a Floor sweep needs a quiet channel.
+  uint32_t heard = 0;
+  // Carrier-sense events the driver counted, over those of its counter
+  // windows (about 2 s each) that lie wholly inside the dwell, and the
+  // time they cover: less than the dwell by up to two windows. A frame the
+  // receiver starts on and does not deliver is in here and not in `heard`.
+  // seen_ms 0 = no window fitted, or the radio has no such count.
+  uint32_t seen = 0;
+  uint32_t seen_ms = 0;
 };
 
 // Sweeps the cells of one SweepCmd at a time -- Power, Verify (armed
@@ -450,6 +460,25 @@ class CalSweep {
   std::vector<uint8_t> floor_cands_;
   size_t floor_i_ = 0;
   int floor_confirms_ = 0;
+  // Frames heard and dwell flown over the walk's points so far.
+  // What the receiver took over a stretch of the walk (cal_floor.h
+  // kFloorQuietMaxHeardPerS): the candidate points flown, and the candidate
+  // on the air with its confirmation.
+  struct FloorAir {
+    uint64_t heard = 0, ms = 0, seen = 0, seen_ms = 0;
+    void add(const BlastResult& r, uint32_t dwell_ms) {
+      heard += r.heard;
+      ms += dwell_ms;
+      seen += r.seen;
+      seen_ms += r.seen_ms;
+    }
+    // Frames delivered a second.
+    uint8_t delivered() const { return cal::floor_heard_rate(heard, ms, 0, 0); }
+    // Receiver events a second: those frames or the carrier-sense count.
+    uint8_t events() const { return cal::floor_heard_rate(heard, ms, seen, seen_ms); }
+  };
+  FloorAir floor_walk_;
+  FloorAir floor_edge_;
   cal::FloorReport floor_report_{};
 
   std::optional<cal::SweepDone> pending_done_;

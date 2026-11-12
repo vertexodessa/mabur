@@ -348,21 +348,82 @@ The drone runs it alone (`CalSweep::pump_floor`, rules in
 `common/include/mabur/cal_floor.h`), at 40 MHz, with the GS silent (frames
 the drone hears re-run its gain control and hide the stall):
 
-1. **Reference.** Floor `0x7f`, the receiver as deaf as the field allows,
-   so the channel always reads idle: HT MCS 2, production-sized frames
-   back to back through the video path for 2 s. The median second is the
-   reference rate (about 2500 frames/s).
+1. **Reference.** Floor `0x50`, a receiver deaf enough that the channel
+   always reads idle: HT MCS 2, production-sized frames back to back
+   through the video path for 4 s. The worst second is the reference rate
+   (about 2700 frames/s), the statistic every candidate is judged by: a
+   blast's first second runs about 7 % above the rest while the send queue
+   fills, and no candidate's worst second reaches it. The reference stays far
+   under the top of the field: at `0x7c` and above devourer's
+   energy-detect threshold, which follows the receive gain, stopped a
+   saturated 40 MHz transmitter for good in 9 of 17 starts on one RTL8822E.
 2. **Candidates.** `0x20, 0x22, … 0x36` ascending (12, two IGI steps
    apart), each 300 ms settle then a 4 s dwell. The drone counts what its
    TX path sends in each whole second. A value **passes** when no second
    falls below 95 % of the reference.
 3. **Confirmation.** The first value that passes dwells again for 8 s; a
    value that held 4 s and slips later (one RTL8822E at `0x22`: worst
-   second 2130 of a 2484 median) fails here and the walk goes on upward.
+   seconds of 1665 to 2343 against 2682) fails here and the walk goes on
+   upward.
    After two failed confirmations it stops with nothing found.
 4. **Report.** The SweepDone carries the reference rate, the confirmed
-   value (0 = none), each candidate's worst second and the confirmation's
-   worst second in percent; the drone puts its flown floor back.
+   value (0 = none), each candidate's worst second, the confirmation's
+   worst second in percent, the frames per second the drone heard and
+   whether it found the channel not quiet; the drone puts its flown floor
+   back.
+
+The walk has an answer on a quiet channel only. Other traffic does two
+things to it (`docs/findings/2026-11-11-wide-tx-floor.md`, "Heard frames
+and the hold"). Carrier sense defers to it, so a healthy floor loses
+rate: one RTL8822E at its edge `0x24` kept 99 % with 40 short frames/s
+heard, 95 % with 160, and 86 % with 80 frames/s of 1.8 ms; under the pass
+bar the walk reads the edge too high or finds none. And frames the drone
+hears free a held transmitter part of the time: `0x20` sent 0 frames/s in
+silence, 29 % of the full rate with 5 frames/s heard, 54 % with 20, 84 %
+with 80; with frames the receiver delivers it never reached the pass
+bar.
+
+The GS is silent for the sweep, so what the drone's receiver takes
+during a point is other traffic, and the drone judges the channel itself
+against one bound, 5 a second (`kFloorQuietMaxHeardPerS`):
+
+- **Frames its receiver delivers**, as a mean over the candidate points
+  flown. Above the bound the walk stops at once.
+- **Receiver events over the stretch that decides the report**: the dwell
+  and confirmation of the value about to be reported, or of the last
+  candidate when none passed. An event is a delivered frame or a
+  carrier-sense event of the driver's counter (devourer `RxActivity`),
+  which has a frame start whether or not the frame is delivered. Above
+  the bound the sweep ends with no result.
+
+The second count is there for frames the receiver starts on and does not
+deliver. They free a held transmitter most: under 40 such frames/s, with
+1 frame/s delivered, `0x20` sent 96 % of the full rate and passed the bar
+in 6 of 8 dwells, and under 160 in 8 of 8, so the walk would report an
+edge under the unit's real one. The counter reads the injected rate
+exactly, delivered or not, and 0 at a healthy floor in silence. A point
+counts the driver's counter windows (about 2 s each) that lie wholly
+inside it, so the count covers about half of the stretch.
+
+Under the unit's edge the counter is no measure of the channel, which is
+why it does not end the walk there: `0x20` in silence reads either 0 or
+a steady 19 events a second for many seconds on end, sending 26 to 60 %
+of the full rate while it does. Such a candidate fails the bar either
+way.
+
+Not covered: traffic on the secondary 20 MHz channel alone. It takes the
+same rate from a healthy floor as traffic on the primary and neither
+count sees it: the walk reads the edge too high, or finds none. A radio
+whose driver has no such counter (Jaguar1) is judged by delivered frames
+alone.
+
+Calibrate the floor where no other network is in reach. The
+reference point's receiver is too deaf to hear the traffic (0 frames in
+its seconds against 281 to 686 a second at `0x20` on the same channel),
+so a busy channel shows at the first candidate, about 9 s into the sweep.
+The GS then writes nothing (`the channel is not quiet: the drone heard N
+frames/s`), the floor in the drone's file stays in force, and the 40 MHz
+sweeps after it run as planned.
 
 The confirmed value is the unit's **floor edge**, reported as a
 measurement of its own (`maburcal`: `floor edge 0x24`; `floor edge none
@@ -376,19 +437,20 @@ step while 40 MHz flies) but on one RTL8822E (edge `0x24`) the drone took
 same video; what it buys at long range is unmeasured. The write is an
 apply of its own (`has` bit 2, the value in the `legacy` byte), patched
 into `radio.wide_tx_igi_floor` and applied live, so the rest of the run
-flies it. No value passing, a reference that sent nothing, or a lost
-SweepDone write nothing; the floor result says which.
+flies it. No value passing, a reference that sent nothing, a channel that
+is not quiet, or a lost SweepDone write nothing; the floor result says
+which. Of these only the busy channel lets the 40 MHz sweeps go on.
 
 A candidate below the unit's edge holds the TX path, and `maburd`'s data
 sends wait on the chip without a timeout (`no_cancel_multipkt`). The
 blast therefore runs a watchdog: a send still pending 1 s past the dwell
-gets the floor raised to `0x7f`, the held frames air and the point fails
+gets the floor raised to the reference's `0x50`, the held frames air and the point fails
 (its stalled seconds read 0). The run's end puts the floor from the file
 back.
 
-The longest walk is 15 points of settle plus 2 + 12 × 4 + 2 × 8 s of
-dwell, 70.5 s; a unit whose edge is `0x24` behind a marginal `0x22` takes
-about 32 s.
+The longest walk is 15 points of settle plus 4 + 12 × 4 + 2 × 8 s of
+dwell, 72.5 s; a unit whose edge is `0x24` behind a marginal `0x22` takes
+about 34 s.
 
 ### 6. The end of a run
 
@@ -415,15 +477,15 @@ and resume video on its own.
 | apply + verify | ~1.5 s per power sweep (8 × 25 ms of verify air, 200 ms start, 1 s listen tail) |
 | capacity sweep | 18.4 s per width (8 × 2.3 s) + 200 ms start + ack |
 | apply (capacity) | one round trip |
-| floor sweep | ~32 s for an edge at `0x24` with a marginal `0x22`; 70.5 s at most |
+| floor sweep | ~34 s for an edge at `0x24` with a marginal `0x22`; 72.5 s at most |
 | apply (floor) | one round trip |
 
 The host loopback test (`test_cal_e2e`) reaches `done` for four sweeps at
 82 s simulated, for the bare start's five (both widths with the floor,
-edge `0x24` behind a marginal `0x22`, from a 20 MHz link) at 115 s, and for
+edge `0x24` behind a marginal `0x22`, from a 20 MHz link) at 117 s, and for
 `power20` alone at 22 s. The target is a full run under two minutes and a
 walls-only 20 MHz run under half a minute; the drone's `hard_cap_ms`
-(240 s) leaves room for a 70.5 s floor walk and a lossy uplink's
+(240 s) leaves room for a 72.5 s floor walk and a lossy uplink's
 resends.
 
 ## The drone during a run
@@ -850,7 +912,7 @@ P <rate> <offered> <recv_best> <air_bits_best> <eff_x1000> <blocked_pct> <flags>
 A <bw> <0|1> <reason to end of line>                                 # per apply
 V <rate> <idx> <pct>                                                 # per verify cell
 F <floor> <min_fps>                                                  # per floor candidate tried
-L <ref_fps> <found> <confirm_pct> <written>                          # per floor sweep
+L <ref_fps> <found> <confirm_pct> <written> <heard_fps> <noisy>      # per floor sweep
 N <bw> <why to end of line>                                          # width's rest skipped
 ```
 

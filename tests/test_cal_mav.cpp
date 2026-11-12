@@ -196,6 +196,8 @@ TEST(a_floor_apply_and_a_floor_sweep_round_trip) {
   r.floor = 0x24;
   r.tried = 12;
   r.confirm_pct = 97;
+  r.heard_fps = 41;
+  r.noisy = true;
   for (size_t i = 0; i < r.min_fps.size(); ++i) r.min_fps[i] = static_cast<uint16_t>(100 * i + 7);
   r.min_fps[11] = 0xFFFF;
   auto out3 = parse_one(encode(CalMsg{pack_floor_done(0x66, 1, r)}, kSysId, kCompId, kChanGsLocal));
@@ -209,6 +211,8 @@ TEST(a_floor_apply_and_a_floor_sweep_round_trip) {
   CHECK(back.floor == 0x24);
   CHECK(back.tried == 12);
   CHECK(back.confirm_pct == 97);
+  CHECK(back.heard_fps == 41);
+  CHECK(back.noisy);
   CHECK(back.min_fps == r.min_fps);
 }
 
