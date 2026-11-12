@@ -49,8 +49,8 @@ TEST(verify_cells_skip_undetermined) {
 TEST(a_floor_sweep_lasts_at_most_its_whole_walk) {
   const auto c = mabur::cal::make_floor_sweep(1, 0);
   // 1 reference + 12 candidates + 2 confirmations, 300 ms settle each,
-  // dwells 2 s + 12 * 4 s + 2 * 8 s = 70.5 s: under the 90 s budget.
-  CHECK(sweep_duration_ms(c) == 15 * 300 + 2000 + 12 * 4000 + 2 * 8000);
+  // dwells 4 s + 12 * 4 s + 2 * 8 s = 72.5 s: under the 90 s budget.
+  CHECK(sweep_duration_ms(c) == 15 * 300 + 4000 + 12 * 4000 + 2 * 8000);
   CHECK(sweep_duration_ms(c) < 90000);
 }
 

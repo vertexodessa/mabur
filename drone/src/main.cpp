@@ -2834,6 +2834,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     mabur::UsbTxPool* pool = nullptr;  // null when radio.tx_threads == 1
     std::shared_mutex* gate = nullptr;
     std::atomic<bool>* gate_waiting = nullptr;
+    // Every frame the RX callback saw, own, foreign or CRC-failed.
+    const std::atomic<uint64_t>* rx_beat = nullptr;
     AmpduCfg ampdu;
     bool ldpc = true;
     bool set_point(uint8_t mcs, uint8_t bw) override {
@@ -2861,7 +2863,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       // and maburd's DATA sends wait on the chip without a timeout
       // (DeviceConfig::Tx::no_cancel_multipkt), so a floor sweep's blast
       // would never return. A send still pending 1 s past the dwell gets the
-      // floor raised to the top of the field (cal_floor.h kFloorRef): the
+      // floor raised to the reference point's (cal_floor.h kFloorRef): the
       // receiver goes deaf, the channel reads idle, the held frames air and
       // the send returns. That one register write overlaps a pending
       // bulk-OUT, against the device's threading rule; the stalled send
@@ -2894,6 +2896,15 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       }
       uint32_t seq = 0;
       uint64_t offered = 0, call_us = 0;
+      const uint64_t heard0 = rx_beat ? rx_beat->load(std::memory_order_relaxed) : 0;
+      // Sums the driver's gain-control pass keeps from the counters it
+      // reads anyway: taking them reads no register, also mid-blast. They
+      // move once a pass, and the pass that ends first inside the blast
+      // covers time before it (the point before this one, at another
+      // floor): the count starts from that pass, so it is of windows that
+      // lie wholly inside this blast.
+      const RxActivity act_before = dev ? dev->GetRxActivity() : RxActivity{};
+      RxActivity act0;
       const uint64_t wait0 = pool ? pool->space_wait_us() : 0;
       const uint64_t t0 = now_steady_us();
       const uint64_t t_end = t0 + static_cast<uint64_t>(dwell_ms) * 1000;
@@ -2906,6 +2917,10 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
             b.body[11] = static_cast<uint8_t>((seq >> 8) & 0xFF);
             seq = (seq + 1) & 0xFFFFFF;
           }
+        }
+        if (act_before.valid && !act0.valid) {
+          const RxActivity a = dev->GetRxActivity();
+          if (a.window_us != act_before.window_us) act0 = a;
         }
         const uint64_t c0 = now;
         const size_t sent = tx->send_bodies(bodies);
@@ -2928,6 +2943,18 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       r.blocked_pct =
           elapsed ? static_cast<uint8_t>(std::min<uint64_t>(100, blocked * 100 / elapsed)) : 0;
       r.per_second = std::move(per_second);
+      r.heard = static_cast<uint32_t>(std::min<uint64_t>(
+          UINT32_MAX, (rx_beat ? rx_beat->load(std::memory_order_relaxed) : 0) - heard0));
+      const RxActivity act1 = dev ? dev->GetRxActivity() : RxActivity{};
+      if (act0.valid && act1.valid) {
+        r.seen = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX, act1.cca - act0.cca));
+        r.seen_ms = static_cast<uint32_t>(
+            std::min<uint64_t>(UINT32_MAX, (act1.window_us - act0.window_us) / 1000));
+      }
+      // One line a point: what a "channel is not quiet" verdict was made of.
+      std::fprintf(stderr,
+                   "maburd cal: blast %u ms: sent %u, heard %u, carrier sense %u in %u ms\n",
+                   dwell_ms, r.offered, r.heard, r.seen, r.seen_ms);
       return r;
     }
   };
@@ -2970,6 +2997,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     cap.pool = dev_sink.pool;
     cap.gate = &tx_gate;
     cap.gate_waiting = &retune_waiting;
+    cap.rx_beat = &rx_beat;
     cap.ampdu = cfg.ampdu;
     cap.ldpc = cal_ldpc;
     cap.flown_floor = static_cast<uint8_t>(cfg.radio.wide_tx_igi_floor);

@@ -127,7 +127,8 @@ class _Run:
         self.caps_by_bw = {20: {}, 40: {}}
         self.applies = []  # [(bw, ok, reason), ...], one per A row
         # callog 6's floor sweep: F rows [(floor, min_fps), ...] and the L
-        # row (ref_fps, found, confirm_pct, written); None = no floor sweep
+        # row (ref_fps, found, confirm_pct, written, heard_fps, noisy); None = no
+        # floor sweep
         # reported in this run.
         self.floor_rows = []
         self.floor = None
@@ -184,7 +185,7 @@ class _Run:
         if tag == "F" and len(tok) == 3:
             self.floor_rows.append((int(tok[1]), int(tok[2])))
             return
-        if tag == "L" and len(tok) == 5:
+        if tag == "L" and len(tok) == 7:
             self.floor = tuple(int(x) for x in tok[1:])
             return
         if tag == "N" and len(tok) >= 2:
@@ -445,8 +446,16 @@ def _floor_lines(run):
         return []
     if run.floor is None:
         return ["floor40: no result (the drone's report was lost)"]
-    ref, found, confirm, written = run.floor
+    ref, found, confirm, written, heard, noisy = run.floor
     lowest = run.floor_rows[0][0] if run.floor_rows else None
+    if ref and noisy:
+        # The drone's verdict: other traffic frees a held transmitter and
+        # takes rate from a healthy one, so no value tried says anything
+        # about the unit (cal_floor.h kFloorQuietMaxHeardPerS). The report's
+        # byte saturates at 255.
+        n = "255 or more" if heard >= 255 else str(heard)
+        return [f"floor40: not measured, the channel is not quiet (the drone heard "
+                f"{n} frames/s); nothing written, the floor in the file stays"]
     if found and found == lowest:
         # Passed at the first candidate: the unit never stalled in the range.
         head = (f"floor40: floor edge none found at or above 0x{lowest:02x}, "
