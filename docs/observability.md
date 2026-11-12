@@ -1344,7 +1344,10 @@ the phase lock's first offset, clamps and refusals) and the 5 s
 
 Also on that 5 s cadence, one `fec_worker sid=<n>:` line per UEP stream
 when its counters moved: `jobs=`/`build_us/job=` and `joins=`/
-`join_wait_us mean=/max=` cover the async repair worker,
+`join_wait_us mean=/max=` cover the async repair worker (a join is the
+frame stage waiting for the worker: it happens only when the next symbol
+would overwrite a ring row the oldest queued repair still reads, so a
+worker that is merely busy shows `backlog_drops`, not joins),
 `qdepth_max=`/`backlog_drops=` its queue depth and drops, and `inline=`
 counts only queue-full inline fallbacks (the async path building a repair
 on the hot thread because the worker queue was full) — never the
