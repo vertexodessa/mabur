@@ -331,11 +331,117 @@ TEST(lost_when_under_half_arrive_and_lossy_alone_from_half_up) {
   CHECK((r.flags & (kCalLossy | kCalLost)) == 0);
 }
 
+namespace {
+
+// A row from frames received out of 20 per cell, starting at idx -41.
+std::vector<CalCell> row20(const std::vector<int>& got) {
+  std::vector<CalCell> cells;
+  for (size_t i = 0; i < got.size(); ++i)
+    cells.push_back(cell(-41 + static_cast<int>(i), got[i] * 5));
+  return cells;
+}
+
+// 40 MHz mcs5 of a field run, a room between the pair: every cell 19 or 20
+// of 20 up to idx 31 except idx -12, which got 15; delivery ends at 32.
+const std::vector<int> kFieldMcs5 = {
+    20, 20, 20, 20, 20, 20, 19, 20, 19, 20, 20, 20, 20, 20, 20, 19, 20, 20, 20, 18, 20,  // -41..-21
+    20, 20, 19, 20, 20, 20, 19, 20, 15, 20, 20, 19, 20, 20, 20, 19, 20, 20, 20, 20,      // -20..-1
+    20, 20, 20, 20, 20, 20, 20, 19, 20, 20, 20, 20, 20, 20, 20, 20, 20, 19, 20, 20, 19,  // 0..20
+    20, 20, 20, 20, 20, 20, 20, 19, 19, 20, 19, 10, 7,  8,  3,  1,  0,  0,  0,  0,       // 21..40
+    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,       // 41..60
+    0,  0,  0};                                                                          // 61..63
+
+}  // namespace
+
+// One cell that lost 5 of 20 frames used to end the run 44 indices under the
+// real edge, and the table went to the drone 10 dB low with no flag. The
+// three cells above it deliver, so power was not what failed it.
+TEST(a_single_failing_cell_with_clean_cells_above_does_not_end_the_run) {
+  const auto cells = row20(kFieldMcs5);
+  CHECK(cells.size() == 105);
+  const auto w = analyze_rate(cells, CalThresholds{});
+  CHECK(w.wall == 31);
+  CHECK(w.floor_idx == -41);
+  CHECK((w.flags & kCalBridged) != 0);
+  CHECK((w.flags & kCalNoDip) == 0);
+
+  // REVERT CHECK: with the exception off the old wall comes back.
+  CalThresholds strict;
+  strict.bridge_clean = 0;
+  const auto old = analyze_rate(cells, strict);
+  CHECK(old.wall == -13);
+  CHECK((old.flags & kCalBridged) == 0);
+}
+
+// The real edge, as the same run's 20 MHz mcs6 measured it: 19 19 16 20 13
+// 10 ... The cell after the first dip delivers, the one after that does not:
+// that is the comb starting, and the wall stays under the first dip.
+TEST(a_dip_at_the_edge_still_ends_the_run) {
+  std::vector<int> got(66, 20);                    // -41..24
+  got.insert(got.end(), {19, 16, 20, 13, 10, 12, 10});  // 25..31
+  got.resize(105, 0);
+  const auto w = analyze_rate(row20(got), CalThresholds{});
+  CHECK(w.wall == 25);
+  CHECK((w.flags & kCalBridged) == 0);
+}
+
+TEST(two_failing_cells_in_a_row_end_the_run) {
+  std::vector<int> got(105, 20);
+  got[30] = got[31] = 15;  // idx -11 and -10
+  const auto w = analyze_rate(row20(got), CalThresholds{});
+  CHECK(w.wall == -12);
+  CHECK((w.flags & (kCalBridged | kCalNoDip)) == 0);
+}
+
+// Fewer than three cells left above the dip: nothing proves that more power
+// delivers, so the run ends there and the row is not a no-dip row.
+TEST(a_failing_cell_near_the_top_of_the_sweep_ends_the_run) {
+  std::vector<int> got(105, 20);
+  got[102] = 15;  // idx 61, two cells above it
+  auto w = analyze_rate(row20(got), CalThresholds{});
+  CHECK(w.wall == 60);
+  CHECK((w.flags & (kCalBridged | kCalNoDip)) == 0);
+
+  got[102] = 20;
+  got[101] = 15;  // idx 60, three clean cells above it
+  w = analyze_rate(row20(got), CalThresholds{});
+  CHECK(w.wall == kRailRel);
+  CHECK((w.flags & kCalBridged) != 0);
+  CHECK((w.flags & kCalNoDip) != 0);
+}
+
+// The walls that field run wrote at 40 MHz before the exception: mcs5 sat 43
+// indices under mcs6. A slower rate cannot have the lower wall.
+TEST(a_wall_under_a_faster_rates_wall_is_marked) {
+  const int walls[8] = {63, 63, 63, 63, 44, -13, 30, 25};
+  RateWall w[8];
+  for (int r = 0; r < 8; ++r) w[r].wall = walls[r];
+  w[7].flags = kCalSaturated;
+  mark_under_faster(w, 8);
+  for (int r = 0; r < 8; ++r) CHECK(((w[r].flags & kCalUnderFaster) != 0) == (r == 5));
+  CHECK((w[7].flags & kCalSaturated) != 0);
+
+  // An undetermined rate is neither marked nor a reference; equal walls pass.
+  RateWall u[4];
+  u[0].wall = 20;
+  u[1].wall = kNoWall;
+  u[2].wall = 20;
+  u[3].wall = kNoWall;
+  mark_under_faster(u, 4);
+  for (const auto& x : u) CHECK((x.flags & kCalUnderFaster) == 0);
+  u[1].wall = 10;
+  mark_under_faster(u, 4);
+  CHECK((u[1].flags & kCalUnderFaster) != 0);
+  CHECK((u[0].flags & kCalUnderFaster) == 0);
+}
+
 TEST(drift_flag_bit_is_not_reused) {
   CHECK(kCalTxBound == 64);
   CHECK(kCalLossy == 128);
   CHECK(kCalLost == 256);
   CHECK(kCalShortSpan == 512);
+  CHECK(kCalBridged == 1024);
+  CHECK(kCalUnderFaster == 2048);
 }
 
 MTEST_MAIN

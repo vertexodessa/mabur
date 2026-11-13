@@ -593,9 +593,10 @@ bool CalSession::analyze_power() {
       for (const auto& c : rows[r]) log_->cell(static_cast<uint8_t>(r), c.idx, c);
 
   bool any = false;
+  for (size_t r = 0; r < 8; ++r) w.walls[r] = analyze_rate(rows[r], cfg_.th);
+  mark_under_faster(w.walls.data(), w.walls.size());
   for (size_t r = 0; r < 8; ++r) {
-    const RateWall rw = analyze_rate(rows[r], cfg_.th);
-    w.walls[r] = rw;
+    const RateWall rw = w.walls[r];
     if (log_) log_->wall(static_cast<uint8_t>(r), rw);
     // An undetermined wall is left alone in the drone's config: never
     // write a fabricated number over a real measurement.

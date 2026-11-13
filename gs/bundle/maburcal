@@ -77,6 +77,9 @@ KNOWN_CALLOG_VERSIONS = (1, 2, 3, 4, 5, 6)
 # 64=tx_bound 128=lossy 256=lost (callog 4+ capacity sweeps only; lost
 # always comes with lossy) 512=short_span (callog 5 capacity only: too few
 # frames or too short a receive span to time, eff over the commanded dwell)
+# 1024=bridged (the delivered run passed a single failing cell that had three
+# clean cells above it) 2048=under_faster (the wall is lower than a faster
+# rate's wall: cut short by loss, not by power)
 TX_BOUND = 64
 LOST = 256
 
@@ -91,6 +94,8 @@ FLAG_NAMES = (
     (128, "lossy"),
     (256, "lost"),
     (512, "short_span"),
+    (1024, "bridged"),
+    (2048, "under_faster"),
 )
 
 

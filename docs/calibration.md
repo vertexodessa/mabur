@@ -261,6 +261,17 @@ diversity protects against fading, not against PA compression (both cards
 receive the same degraded waveform), and a union would push the wall up
 (`gs/src/cal_analysis.cpp`). Every shortcut errs low, never high.
 
+One failing cell does not end the run when the three cells right above it
+deliver (`bridge_clean`): more power delivered again, so that cell lost
+its frames to the channel and not to the PA. The row is flagged
+`bridged`. The comb is out of this exception's reach: straight after its
+first dip it shows single delivering cells, never three in a row, and two
+failing cells in a row end the run as before. After all eight rows are
+analysed, a wall that sits under a faster rate's wall is flagged
+`under_faster`: a slower rate tolerates more transmitter distortion, so
+its wall cannot be the lower one, and such a wall was cut short by loss.
+The wall is written as measured.
+
 ### 4. The capacity sweep
 
 Eight points (MCS 0–7) at the sweep's width, each a **300 ms settle then a
@@ -763,6 +774,8 @@ written: this run produced no apply attempt`.
 | `narrow` | The floor edge (first ≥90 % cell) is within 4 indices of the wall. | Move closer and re-run; a wall that close to its own floor is not trustworthy. |
 | `saturated` | The best card's peak median RSSI is above −45 dBm: the GS front end may be compressing. | Walls read **low** under it (the safe direction). Move the drone out and re-run for a tighter number. |
 | `card_disagree` | The two cards' walls differ by more than 2 indices. | An antenna or card problem, not a PA one: check the disagreeing card. |
+| `bridged` | The delivered run passed one or more single failing cells that each had three delivering cells right above them. | The wall is the real end of the run. The channel lost frames during the sweep; a quieter channel gives a cleaner run. |
+| `under_faster` | The wall is lower than a faster rate's wall. | Written as measured, and too low: the run was ended by loss, not by power, so this rate flies with less power than it could. Re-run on a quieter channel. |
 | `tx_bound` | Capacity: the sender was blocked < 50 % of the dwell — the drone's CPU/USB, not the air, was the limit. | Not written; the config keeps its value. Expected at the top MCS if the drone cannot saturate the air there. |
 | `lossy` | Capacity: the best card got < 90 % of the frames offered. | Written (unless also `lost`). Interference, or the parked power is too low for this geometry; re-run on a quieter channel if it fires on low MCS. |
 | `lost` | Capacity: the best card got < 50 % of the frames offered (always with `lossy`). | Not written; the config keeps its value and `maburcal report` prints `-`. Re-run on a quieter channel or closer. |
@@ -774,13 +787,16 @@ retired.
 
 ### Random loss reads walls low
 
-With 20 frames per cell a 90 % threshold has no noise margin: one cell
-that loses 3 frames ends the first contiguous run, and the row's wall
-becomes the cell below it. Because the error always ends the run early,
-it is always **low** — power given up, never overdrive — but a lossy
-channel can take a wall down by tens of indices: a few percent of random
-loss on **both** cards collapses most rows (loss on one card alone is
-absorbed by the best-card rule). The kit does not detect this. The tell is
+With 20 frames per cell a 90 % threshold has no noise margin: a cell that
+loses 3 frames fails. One such cell alone is passed over when the three
+cells above it deliver (`bridged`); two in a row, or one with a failing
+cell among the three above it, end the first contiguous run, and the
+row's wall becomes the cell below. Because the error always ends the run
+early, it is always **low** — power given up, never overdrive — but a
+lossy channel can take a wall down by tens of indices: a few percent of
+random loss on **both** cards collapses most rows (loss on one card alone
+is absorbed by the best-card rule). A row cut that way under a faster
+rate's wall is flagged `under_faster`; a table cut evenly is not. The tell is
 MCS 0-3 coming back **without** `no_dip`, or walls far below the
 reference unit's; re-run on a quieter channel or closer geometry.
 
@@ -933,7 +949,7 @@ even when `short_span` sent eff to the dwell instead). An ok `A` row's reason is
 empty or the drone's note. Flags bitmask: 1
 `no_dip`, 2 `undetermined`, 4 `narrow`, 8 `saturated`, 16
 `card_disagree`, 64 `tx_bound`, 128 `lossy`, 256 `lost`, 512
-`short_span` (32 was `drift`,
+`short_span`, 1024 `bridged`, 2048 `under_faster` (32 was `drift`,
 retired and never reused). A `V` row means "this rate was parked", never "verified
 clean": `pct` 0 is a real measurement.
 
