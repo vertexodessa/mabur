@@ -25,7 +25,8 @@
 // deadline or falls below the floor -- the buckets are NOT disjoint: an
 // entry that booked dropped_deadline and resolves later books both, so the
 // outcomes can sum above syms_requested. A requested entry the stop rule
-// killed still books dropped_deadline at the deadline/floor.
+// killed still books dropped_deadline at the deadline/floor. A fill first
+// seen past the deadline books filled and filled_late.
 // Stop rule: while util >= down_util, a poll with due entries counts one
 // `suppressed` and marks those entries dead -- no catch-up burst later.
 //
@@ -67,6 +68,10 @@ struct NackStats {            // cumulative
   uint64_t requests = 0, repeats = 0, syms_requested = 0, tail_requests = 0;
   uint64_t filled = 0, late_fill = 0, wasted = 0, dropped_deadline = 0, suppressed = 0;
   uint64_t lead_skipped = 0;  // requests (first or repeat) withheld by min_lead_ms, per seq
+  // Of `filled`, the fills the tracker saw only after the seq's deadline
+  // (gap_timeout_ms after t0): too late for the frame. Not exported in the
+  // stats; the ladder's link.nack_residual = "timely" books them as lost.
+  uint64_t filled_late = 0;
 };
 
 struct NackWindow {           // since the last take_window()
