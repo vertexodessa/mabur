@@ -60,6 +60,8 @@
 #include "frame_source.h"
 #include "live_power_table.h"
 #include "mav_component.h"
+#include "maint_server.h"
+#include "mabur/maint_wire.h"
 #include "mabur/channel_file.h"
 #include "mabur/cal_mav.h"
 #include "mabur/cal_proto.h"
@@ -1670,6 +1672,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // parameter set rewrites the config file, I/O that belongs on neither the
   // RX nor the agent thread.
   RcQueue mav_queue;
+  // Maintenance-lane frames (mabur/maint_wire.h) from the RX callback to the
+  // maint thread, which runs the shell; and its video-off lease, which the
+  // hot thread honours like a calibration session's quiesce.
+  RcQueue maint_queue;
+  std::atomic<bool> maint_video_off{false};
   // The calibration messages the MAV thread pulls out of verified cal-only
   // T_MAV frames, for the TX writer thread: CalSweep's on_cmd/on_apply/
   // on_abort must run on pump()'s thread (cal_sweep.h constraint 1).
@@ -1816,6 +1823,12 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     if (pkt.Data.size() < kDot11HeaderLen + 4) return;
     const uint8_t* body = pkt.Data.data() + kDot11HeaderLen;
     size_t body_len = pkt.Data.size() - kDot11HeaderLen;
+    // The maintenance lane is not an RC frame and outlives RC_VERSION; its
+    // own CRC is checked by the maint thread.
+    if (mabur::maint::is_maint(body, body_len)) {
+      if (!pkt.RxAtrib.crc_err) maint_queue.push(body, body_len);
+      return;
+    }
     const int rc_type = rc::frame_type(body, body_len);
     if (rc_type >= 0) {
       // Calibration rides T_MAV (the mabur dialect): the MAV thread verifies
@@ -2272,6 +2285,56 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     }
   });
 
+  // Maintenance lane: a shell for the GS (maint_server.h). Its replies go
+  // out on the Telem path like the MAV thread's (control radiotap, the shared
+  // telem dot11 seq, dev_sink.send()). Works with or without a published
+  // session: a GS at another RC_VERSION reaches it too. SIGPIPE is blocked
+  // here so a command that stops reading its stdin cannot kill maburd.
+  std::thread maint_thread([&]() {
+    name_thread("mbr-maint");
+    sigset_t pipe_set;
+    sigemptyset(&pipe_set);
+    sigaddset(&pipe_set, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &pipe_set, nullptr);
+    MaintServer srv(MaintServerCfg{}, spawn_shell);
+    ControlRadiotap maint_radiotap = make_control_radiotap();
+    std::vector<uint8_t> body;
+    std::vector<mabur::maint::Frame> out;
+    uint64_t sessions = 0;
+    constexpr uint64_t kArmStaleMs = 3000;
+    while (!g_devourer_should_stop) {
+      const uint64_t now = now_steady_ms();
+      const bool armed = agent.armed_now(now, kArmStaleMs);
+      while (maint_queue.pop(body)) {
+        if (auto f = mabur::maint::parse(body.data(), body.size())) srv.on_frame(*f, now, armed);
+      }
+      out.clear();
+      srv.poll(now, armed, &out);
+      for (const auto& f : out) {
+        const auto w = mabur::maint::pack(f);
+        const std::vector<uint8_t>& rt = maint_radiotap.get();
+        std::vector<uint8_t> frame;
+        frame.reserve(rt.size() + kDot11HeaderLen + w.size());
+        frame.insert(frame.end(), rt.begin(), rt.end());
+        auto hdr = build_dot11_header(telem_dot11_seq.fetch_add(1, std::memory_order_relaxed) & 0xFFF);
+        frame.insert(frame.end(), hdr.begin(), hdr.end());
+        frame.insert(frame.end(), w.begin(), w.end());
+        dev_sink.send(frame.data(), frame.size());
+      }
+      const bool off = srv.video_off(now);
+      if (off != maint_video_off.load(std::memory_order_relaxed)) {
+        maint_video_off.store(off, std::memory_order_relaxed);
+        std::fprintf(stderr, "maburd maint: video %s\n", off ? "off (lease)" : "on");
+      }
+      if (srv.stats().sessions != sessions) {
+        sessions = srv.stats().sessions;
+        std::fprintf(stderr, "maburd maint: session %llu opened\n",
+                     static_cast<unsigned long long>(sessions));
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  });
+
   // TX body queue between the encode (hot) thread and the USB writer
   // thread: a bulk-OUT stall backs up HERE (bounded, drop-oldest =
   // FEC-recoverable erasures) instead of in the waybeam SHM ring, whose
@@ -2433,7 +2496,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       // it. hot_beat still has to advance, though: the watchdog below aborts
       // the whole daemon on "hot thread stalled" if it doesn't see a beat
       // within stale_ms, and that check knows nothing about calibration.
-      if (cal_active.load(std::memory_order_relaxed)) {
+      if (cal_active.load(std::memory_order_relaxed) ||
+          maint_video_off.load(std::memory_order_relaxed)) {
         hot_beat.fetch_add(1, std::memory_order_relaxed);
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         continue;
@@ -3744,6 +3808,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   if (agent_thread.joinable()) agent_thread.join();
   stop_msp();
   if (mav_thread.joinable()) mav_thread.join();
+  if (maint_thread.joinable()) maint_thread.join();
   tx_pool.stop();  // drain + join senders before device teardown
 
   vtx_rec.shutdown();   // close the file before the record channel is torn down
