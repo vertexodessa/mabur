@@ -273,6 +273,34 @@ TEST(crc_failed_body_needs_its_stream_heard_clean) {
   CHECK(agg.card(0).crc_fail == 5);
 }
 
+// MSP flies at the robust control modulation and stays FCS-good through a
+// fade that fails every video body. It must not count as "something clean":
+// the corrupt video bodies are all salvage has left.
+TEST(clean_msp_does_not_end_a_fade) {
+  mabur::MspSourceCfg cfg;
+  std::vector<std::vector<uint8_t>> msp;
+  mabur::MspSource src(cfg, [&](const uint8_t* b, size_t n) { msp.emplace_back(b, b + n); });
+  std::vector<uint8_t> blob, clear = {2}, ds = {3, 0, 0, 0, 'X'}, draw = {4};
+  mabur::msp_append_message(blob, mabur::MSP_CMD_DISPLAYPORT, clear.data(), clear.size());
+  mabur::msp_append_message(blob, mabur::MSP_CMD_DISPLAYPORT, ds.data(), ds.size());
+  mabur::msp_append_message(blob, mabur::MSP_CMD_DISPLAYPORT, draw.data(), draw.size());
+  src.on_serial_bytes(blob.data(), blob.size(), 1000);
+  REQUIRE(!msp.empty());
+  std::vector<std::vector<uint8_t>> video;
+  for (auto& b : encode_fixture_bodies())
+    if (mabur::sbi_peek_stream_id(b.data(), b.size()) == 0) video.push_back(b);
+  REQUIRE(video.size() >= 2);
+
+  Aggregator agg(vec_layers(), 512, 1);
+  int frags = 0;
+  agg.set_frag_sink([&](const mabur::DecodedFrag&) { ++frags; });
+  agg.on_rx_body(msg(0, 10, true, video[0]));                 // video clean once
+  const int clean_frags = frags;
+  for (uint16_t t = 100; t <= 600; t += 50) agg.on_rx_body(msg(0, t, true, msp[0]));
+  agg.on_rx_body(msg(0, 601, false, video[1]));               // 591 ms without clean video
+  CHECK(frags > clean_frags);
+}
+
 // The base stream alone on the air: a flip to stream 1 has no clean stream
 // 1 to join. (With both video streams live a 0 <-> 1 flip still lands; the
 // header carries no CRC to tell.)
