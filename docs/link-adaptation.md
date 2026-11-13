@@ -120,7 +120,7 @@ decoder does. Gating the probe sink on `crc_ok` would book every FCS-failing
 PPDU as a full `bpb`-block loss and bias the gate toward Lossy. The one gate
 is the aggregator's clean-stream rule (`docs/observability.md`, corrupt-frame
 salvage): an FCS-failed body reaches its sink only if its stream was heard
-FCS-good within 500 ms, or nothing was.
+FCS-good within 500 ms, or no video body was.
 
 **Scoring rule: union across cards, AU count for expected, never seq gaps.**
 `ProbeTrack` (`gs/src/probe_track.h`, `on_au(sid, fid)`) books one

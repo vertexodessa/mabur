@@ -160,7 +160,10 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
   } else {
     if (stream_id >= 0) {
       sid_clean_us_[static_cast<size_t>(stream_id)] = m.mono_us + 1;
-      any_clean_us_ = m.mono_us + 1;
+      // Only video ends a fade. MSP flies at the robust control modulation,
+      // so it stays FCS-good while every video body fails: counting it would
+      // drop the corrupt video bodies salvage lives on.
+      if (stream_id == 0 || stream_id == 1) any_clean_us_ = m.mono_us + 1;
     }
     // Per-card delivery from 12-bit hw-seq gaps. The drone's VIDEO counter
     // numbers every injected decoder-bound body. last_seq is a MAX-seq
@@ -299,7 +302,7 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
   // decoder, a video body into the MSP or probe sink). Such a body is
   // routed only to a stream some card heard FCS-good within kCleanStreamUs;
   // otherwise it stays a crc_fail and goes nowhere. In a fade with no
-  // FCS-good SBI body at all for that long, salvage is the only source left,
+  // FCS-good video body for that long, salvage is the only source left,
   // so every FCS-bad body is routed by its peeked id as before.
   if (!m.crc_ok && heard_within(any_clean_us_, m.mono_us)) {
     const uint64_t seen = stream_id >= 0 ? sid_clean_us_[static_cast<size_t>(stream_id)] : 0;
