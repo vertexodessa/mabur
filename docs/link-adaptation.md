@@ -243,6 +243,28 @@ TxQueue is at or past **half its cap**:
 - Telem flags bit4 → sideport `drone.congestion_shed`; maburtop shows
   `CONG`.
 
+A shed that the shed alone does not clear also lowers the encoder bitrate
+(`contention_step_`, 0..3, in the same function):
+- Two signs mean the channel is short (a neighbour holding the air), not
+  a scene-change overshoot:
+  - a new episode that starts within 3 s of the end of the last one (the
+    shed drains the queue, and it refills as soon as the shed lifts);
+  - queue pressure that comes back 2 s or more into one unbroken episode.
+- Either sign drops the airtime budget in `run_bitrate_policy` by one step
+  of x0.75 on top of `encoder.airtime_budget` (the panel's `ENC_AIRTIME`),
+  down to x0.42 at step 3. Steps are at least 2 s apart.
+- The factor scales the budget before the clamp, so `bitrate_min_kbps`
+  stays the floor and the target stays a function of the op and the step.
+- Recovery is one step per 10 s with no shed at all and 10 s since the
+  last step. A step down that is undone within 10 s (the neighbour is
+  still there, and the step down cost a keyframe plus a third more bitrate)
+  doubles that wait for the next try, up to 60 s. A step down that holds
+  puts it back to 10 s.
+- The MCS is not touched. The step reaches the GS as Telem `cmd_kbps`, and
+  the drone log prints `rc: contention step N`.
+- On Star6E a rate change through `MI_VENC_SetChnAttr` emits a keyframe, so
+  every step costs one keyframe.
+
 `txq.drops` is a telemetry counter only: by the time it moves the damage
 is done. Flight record of the cascade that motivated the shed:
 `docs/findings/2026-09-03-handover-venc-overshoot.md`.

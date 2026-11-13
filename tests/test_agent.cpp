@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <set>
 #include <string>
@@ -1015,6 +1016,185 @@ TEST(txq_pressure_sheds_enh_before_drops) {
   agent.tick(2300, h);  // 2000 ms since the last pressure tick: level 1 -> 0
   CHECK(agent.state() == RcAgent::State::LINKED);
   CHECK(agent.current().shed[1] == false);
+}
+
+// 9a2. Sheds the shed alone does not stop lower the bitrate a step. Queue
+// pressure that is still there 2 s into one unbroken shed episode, or a new
+// episode within 3 s of the last one's end, is a channel that stays short
+// (a neighbour), not an encoder overshoot: the airtime budget drops x0.75 per
+// step, at most three steps 2 s apart, never under bitrate_min_kbps, and
+// climbs back one step per 10 s with no shed. The MCS never moves. REVERT
+// CHECK: drop the contention step from run_congestion_guard and the t=2100
+// bitrate stays at the base value.
+namespace {
+struct ShedRig {
+  Config cfg = make_cfg();
+  MockActuator act;
+  RcAgent agent{cfg, act};
+  uint32_t vtx = 0;
+  uint32_t seq = 1;
+  uint8_t profile = encode_profile(PhyMode::HT, 2, 20);
+  ShedRig() {
+    agent.tick(0, RadioHealth{});
+    vtx = ack_agent(agent, act);
+    rcf(0);
+    linked_at = act.bitrates.size() - 1;
+  }
+  // Index of the first bitrate written at the linked rung (before it: the
+  // boot MAX_RANGE value).
+  size_t linked_at = 0;
+  std::vector<int> linked_bitrates() const {
+    return {act.bitrates.begin() + static_cast<long>(linked_at), act.bitrates.end()};
+  }
+  void rcf(uint64_t at) {
+    auto w = make_rcf_wire(seq++, profile, 8, vtx);
+    agent.on_rc_frame(w.data(), w.size(), at);
+  }
+  // Agent ticks every 100 ms over [from, to), an RCF every 500 ms so the
+  // link stays LINKED, the queue at `depth` of 255.
+  void run(uint64_t from, uint64_t to, size_t depth) {
+    RadioHealth h;
+    h.txq_cap = 255;
+    h.txq_depth = depth;
+    for (uint64_t t = from; t < to; t += 100) {
+      if (t % 500 == 0) rcf(t);
+      agent.tick(t, h);
+    }
+  }
+};
+}  // namespace
+
+TEST(sustained_shed_steps_the_bitrate_down_and_recovers) {
+  ShedRig r;
+  REQUIRE(!r.act.bitrates.empty());
+  const int base = r.act.bitrates.back();
+  REQUIRE(base > 4000);
+  REQUIRE(base < 15000);  // under bitrate_max even after /0.75: the steps are visible
+
+  r.run(100, 2100, 200);  // shed from t=100; under 2 s into the episode: no step
+  CHECK(r.agent.current().shed[1] == true);
+  CHECK(r.agent.contention_step() == 0);
+  CHECK(r.act.bitrates.back() == base);
+
+  r.run(2100, 2200, 200);  // 2 s into the same episode and still full: step 1
+  CHECK(r.agent.contention_step() == 1);
+  CHECK(std::abs(r.act.bitrates.back() - base * 3 / 4) <= 100);
+
+  r.run(2200, 10000, 200);  // the neighbour stays: steps 2 and 3, then held
+  CHECK(r.agent.contention_step() == 3);
+  const int low = r.act.bitrates.back();
+  CHECK(std::abs(low - static_cast<int>(base * 0.421875)) <= 100);
+  CHECK(r.agent.current().ladder[0].mcs == 2);
+  for (int b : r.linked_bitrates()) CHECK(b >= low);  // no step past the third
+
+  // Queue empty from t=10000: the shed decays 3 -> 0 over three 2 s windows
+  // (gone at 15900), then each step back up needs 10 s with no shed.
+  r.run(10000, 25800, 0);
+  CHECK(r.agent.current().shed[1] == false);
+  CHECK(r.agent.contention_step() == 3);
+  r.run(25800, 26000, 0);
+  CHECK(r.agent.contention_step() == 2);
+  r.run(26000, 56000, 0);
+  CHECK(r.agent.contention_step() == 0);
+  CHECK(r.act.bitrates.back() == base);
+}
+
+// The neighbour as the bench shows it: one pressure tick, the shed drains
+// the queue and lifts 2 s later, and the queue is full again a second after
+// that. Each new episode that starts within 3 s of the last one's end is a
+// step, 2 s apart at the least.
+TEST(shed_reentry_steps_the_bitrate_down) {
+  ShedRig r;
+  const int base = r.act.bitrates.back();
+  // Pressure at t0 only; episode t0..t0+2000; the next one at t0+3000.
+  for (uint64_t t0 = 100; t0 < 12100; t0 += 3000) {
+    r.run(t0, t0 + 100, 200);
+    r.run(t0 + 100, t0 + 3000, 0);
+  }
+  // Onsets at 100 (first: no step), 3100, 6100, 9100: three re-entries.
+  CHECK(r.agent.contention_step() == 3);
+  CHECK(std::abs(r.act.bitrates.back() - static_cast<int>(base * 0.421875)) <= 100);
+  CHECK(r.agent.current().ladder[0].mcs == 2);
+}
+
+// A neighbour that one step is enough for: at step 0 the queue fills once
+// every 3 s, at step 1 never. Each step back to 0 is undone within 10 s, so
+// the clean time before the next try doubles: 10, 20, 40, then 60 s at most.
+// Once the neighbour leaves, the step down that holds puts the wait back to
+// 10 s for the next neighbour. REVERT CHECK: keep the hold at 10 s and the
+// tries are 10 s apart for the whole run (11 step-ups in 200 s instead of 5).
+TEST(failed_step_downs_wait_longer) {
+  ShedRig r;
+  RadioHealth h;
+  h.txq_cap = 255;
+  std::vector<uint64_t> ups, downs;
+  int last = 0;
+  auto drive = [&](uint64_t from, uint64_t to, bool neighbour) {
+    for (uint64_t t = from; t < to; t += 100) {
+      if (t % 500 == 0) r.rcf(t);
+      h.txq_depth = (neighbour && r.agent.contention_step() == 0 && t % 3000 == 100) ? 200 : 0;
+      r.agent.tick(t, h);
+      const int st = r.agent.contention_step();
+      if (st > last) ups.push_back(t);
+      if (st < last) downs.push_back(t);
+      last = st;
+    }
+  };
+  drive(100, 200000, true);
+  CHECK(r.agent.contention_step() <= 1);
+  REQUIRE(downs.size() >= 4);
+  // Clean wait before each step down, measured from the step up before it.
+  std::vector<uint64_t> waits;
+  for (size_t i = 0; i < downs.size(); ++i) waits.push_back(downs[i] - ups[i]);
+  CHECK(waits[0] >= 10000 && waits[0] < 20000);
+  CHECK(waits[1] >= 20000 && waits[1] < 30000);
+  CHECK(waits[2] >= 40000 && waits[2] < 50000);
+  CHECK(waits[3] >= 60000 && waits[3] < 70000);
+  CHECK(ups.size() <= 5);
+
+  // The neighbour leaves: the step down after the 60 s wait holds.
+  drive(200000, 280000, false);
+  CHECK(r.agent.contention_step() == 0);
+  const size_t n_up = ups.size(), n_down = downs.size();
+  // A new neighbour: the first step down waits 10 s again.
+  drive(280000, 320000, true);
+  REQUIRE(ups.size() > n_up && downs.size() > n_down);
+  CHECK(downs[n_down] - ups[n_up] < 20000);
+}
+
+// An overshoot followed by a clean stretch (the scene-change case) never
+// steps, however often it repeats: 1.5 s of pressure climbs the shed to
+// level 3, which ends 6 s after the last pressure tick, and the next burst
+// comes more than 3 s after that end.
+TEST(isolated_shed_episodes_never_step_the_bitrate) {
+  ShedRig r;
+  const int base = r.act.bitrates.back();
+  for (uint64_t t0 = 100; t0 < 48000; t0 += 12000) {
+    r.run(t0, t0 + 1500, 200);  // 1.5 s of pressure: one episode
+    r.run(t0 + 1500, t0 + 12000, 0);
+    CHECK(r.agent.current().shed[1] == false);
+  }
+  r.run(48100, 52000, 0);
+  CHECK(r.agent.contention_step() == 0);
+  for (int b : r.linked_bitrates()) CHECK(b == base);
+}
+
+// At MAX_RANGE the cut lands on bitrate_min_kbps and stops there: the step
+// scales the budget before the clamp.
+TEST(contention_step_respects_bitrate_min) {
+  Config cfg = make_cfg();
+  cfg.encoder.airtime_budget = 0.60;
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});  // RENDEZVOUS at MAX_RANGE: 1300 kbps
+  REQUIRE(act.bitrates.back() == 1300);
+  RadioHealth h;
+  h.txq_cap = 255;
+  h.txq_depth = 200;
+  for (uint64_t t = 100; t < 8000; t += 100) agent.tick(t, h);
+  CHECK(agent.contention_step() == 3);
+  for (int b : act.bitrates) CHECK(b >= cfg.encoder.bitrate_min_kbps);
+  CHECK(act.bitrates.back() == cfg.encoder.bitrate_min_kbps);
 }
 
 // 9b. FAILSAFE entry forces shed[1]; a subsequent congestion-guard reapply

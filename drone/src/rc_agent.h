@@ -212,6 +212,10 @@ class RcAgent {
   // command (flight-0011) is countable on the bench and attributable in
   // flightreport, instead of vanishing into an unexplained enh gap.
   bool congestion_shed() const { return shed_level_ > 0; }
+  // The congestion guard's bitrate step (0..kContentionMaxStep): how many
+  // times a sustained shed has cut the airtime budget (see
+  // run_congestion_guard()). The cut itself reaches the GS as Telem cmd_kbps.
+  int contention_step() const { return contention_step_; }
   bool have_feedback() const { return have_last_fb_; }
   uint64_t last_feedback_ms() const { return last_fb_ms_; }
   uint64_t rcf_accepted() const { return rcf_accepted_; }
@@ -621,6 +625,21 @@ class RcAgent {
   uint64_t last_tx_drops_ = 0;
   bool have_last_tx_drops_ = false;
 
+  // Contention step state (run_congestion_guard()). shed_edge_ms_ is the
+  // last shed edge: the start of the current episode while shedding, the end
+  // of the last one otherwise (have_shed_end_ once there was one).
+  int contention_step_ = 0;
+  bool contention_shedding_ = false;
+  uint64_t shed_edge_ms_ = 0;
+  bool have_shed_end_ = false;
+  uint64_t step_ms_ = 0;
+  bool have_step_ms_ = false;
+  // The clean time a step down waits for: kContentionDownMs, doubled (up to
+  // kContentionHoldMaxMs) each time a step down is undone within
+  // kContentionDownMs, back to kContentionDownMs once one holds.
+  uint64_t down_hold_ms_ = kContentionDownMs;
+  bool last_step_down_ = false;
+
   // True for as long as MAX_RANGE is the operating point — i.e. RENDEZVOUS
   // (including BOOT's initial apply) or FAILSAFE — set in apply_max_range()
   // and cleared the moment a resolved RCF op takes the agent back to
@@ -643,6 +662,15 @@ class RcAgent {
   // than a flight, long enough that the re-apply is ~1/50 of the tick rate
   // (tick_ms 100) and cannot itself become a source of MI-call churn.
   static constexpr uint64_t kReassertMs = 5000;
+  // Contention step cadence and depth (run_congestion_guard()).
+  static constexpr int kContentionMaxStep = 3;
+  static constexpr uint64_t kContentionUpMs = 2000;
+  static constexpr uint64_t kContentionDownMs = 10000;
+  static constexpr uint64_t kContentionReentryMs = 3000;
+  static constexpr uint64_t kContentionHoldMaxMs = 60000;
+  // Airtime budget multiplier per step: x0.75 each.
+  static constexpr double kContentionFactor[kContentionMaxStep + 1] = {1.0, 0.75, 0.5625,
+                                                                       0.421875};
 
   void apply_max_range(uint64_t now_ms);
   void apply_ladder_op(const std::array<rc::LayerTxSpec, 2>& ladder,
