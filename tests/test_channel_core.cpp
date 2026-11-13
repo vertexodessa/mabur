@@ -3855,7 +3855,7 @@ TEST(lease_one_card_masks_the_verdict_around_the_burst) {
     VideoAir air;
     for (int i = 0; i < 100; ++i) video_tick(g, air);
     const auto s0 = g.core->snapshot(0);
-    REQUIRE(s0.hop.verdict == "healthy");
+    REQUIRE(std::string(s0.hop.verdict) == "healthy");
     REQUIRE(s0.hop.evidence == 0);
     const int v0 = g.sink.verdicts;
     const size_t d0 = g.sink.dwells.size();
@@ -3870,7 +3870,7 @@ TEST(lease_one_card_masks_the_verdict_around_the_burst) {
     for (int i = 0; i < 100; ++i) {
       video_tick(g, air);
       const auto s = g.core->snapshot(0);
-      CHECK(s.hop.verdict == s0.hop.verdict);
+      CHECK(std::string(s.hop.verdict) == s0.hop.verdict);
       CHECK(s.hop.evidence == s0.hop.evidence);
       CHECK(!s.hop.ref_rung.has_value());
     }
