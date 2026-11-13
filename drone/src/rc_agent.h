@@ -368,6 +368,14 @@ class RcAgent {
   // armed", which separates a pre-flight drone from a downed one. NOT a
   // policy input -- low_power() deliberately does not read it.
   bool armed_latched() const { return armed_latched_; }
+  // The FC reported ARMED in its last arm report and that report is at most
+  // stale_ms old. Any thread: reads only the MSP thread's handoff word.
+  bool armed_now(uint64_t now_ms, uint64_t stale_ms) const {
+    const uint64_t r = arm_report_.load(std::memory_order_relaxed);
+    if (r == 0 || (r & 1u) == 0) return false;
+    const uint64_t at = (r >> 1) - 1;
+    return now_ms < at || now_ms - at <= stale_ms;
+  }
 
   // Latched on a BOOT/RENDEZVOUS -> LINKED transition — the process-(re)start
   // link-up, when frames encoded so far never reached the air and the GS may
