@@ -99,6 +99,14 @@ struct LadderCfg {
   double down_util = 0.6, up_util = 0.15;
   int confirm_ms = 250, clean_ms = 5000, probation_ms = 3000;
   int penalty_base_ms = 10000, penalty_max_ms = 60000;
+  // Loss lockout. A loss demote (residual, util, s3, probation) strikes the
+  // rung it leaves; a fade, starved, timeout or re-entry move does not. A
+  // strike below lockout_latch locks that rung against promotes for
+  // lockout_ms; strike lockout_latch locks it until restore() (a channel hop)
+  // or clear_lockout() (a new drone session). An expired lock keeps its
+  // strikes. A rung that keeps losing at the same RF otherwise comes back
+  // every clean_ms and costs a demote each time. lockout_ms 0 = off.
+  int lockout_ms = 0, lockout_latch = 4;
   int hold_after_down_ms = 4000, min_between_changes_ms = 150;
   int feedback_timeout_ms = 1000;
   // A starved sample (zero completed base packets in a decode window while
@@ -318,6 +326,16 @@ class LadderController {
   int probation_ms_left(double now_ms) const;  // 0 when not probing
   std::vector<std::pair<int, int>> penalized(double now_ms) const;  // {rung, ms_left}
 
+  // Rungs the loss lockout holds now; ms_left is -1 for a latched rung.
+  struct Lockout {
+    int rung = 0, ms_left = 0, strikes = 0;
+  };
+  std::vector<Lockout> locked(double now_ms) const;
+  int strikes(int rung) const { return strikes_[static_cast<std::size_t>(rung)]; }
+  // Forget every strike and lock: what they measured belongs to a link that
+  // is gone (a new drone session; restore() does the same for a hop).
+  void clear_lockout();
+
   // --- probe stream view ---
   // The rung the drone must run the probe stream at: min(rung + offset, top),
   // or -1 when nothing is to be probed (feature disabled, or already on the
@@ -360,6 +378,8 @@ class LadderController {
   void check_probation_survival(double now_ms);
   void penalize_rung(int rung, double now_ms);
   bool is_penalized(int rung, double now_ms) const;
+  void strike_rung(int rung, double now_ms);
+  bool is_locked(int rung, double now_ms) const;
   // restore() / swap_restore(): the direct re-entry, logged as `why`.
   void reenter_(int rung, double now_ms, CtlReason why);
   void set_event(double now_ms, int from, int to, CtlReason reason, double u,
@@ -466,6 +486,8 @@ class LadderController {
 
   std::vector<int> fail_count_;        // per-rung consecutive probation-fail count k
   std::vector<double> penalty_until_;  // per-rung penalty expiry (ms); -1e18 = none
+  std::vector<int> strikes_;           // per-rung loss demotes since the last clear
+  std::vector<double> lock_until_;     // per-rung lock expiry (ms); kLatched = latched
 
   // --- probe gate state ---
   ProbeGateState probe_state_ = ProbeGateState::Off;
