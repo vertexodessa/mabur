@@ -605,6 +605,34 @@ TEST(lost_accepted_is_recovered_by_the_reread) {
   CHECK(r.c.stats().timeouts == 0);
 }
 
+// Setting the value the drone already holds: the first re-read shows it at
+// once, while the drone is still applying. That proves nothing, so the set
+// waits for the drone's own answer, and a FAILED still lands.
+TEST(reread_of_an_unchanged_value_waits_for_the_ack) {
+  Rig r;
+  link_and_complete_list(r, 1000);
+  mabur::paramval::Value cur{mabur::cfgparam::Type::Str};
+  cur.s = "90@1920x1080/binned";
+  char wire[128];
+  mabur::paramval::encode_wire(cur, wire);
+  Bytes held = value_pkt("VENC_MODE", 11, wire, mabur::cfgparam::kCount, 2);
+  r.c.on_packet(held.data(), held.size(), 1500);
+  std::string why;
+  REQUIRE(r.c.set(2, "90@1920x1080/binned", 2000, &why));
+  Bytes ip = ack_pkt("VENC_MODE", 11, wire, PARAM_ACK_IN_PROGRESS);
+  r.c.on_packet(ip.data(), ip.size(), 2100);
+  r.sent.clear();
+  r.c.tick(2000 + 2000);
+  REQUIRE(r.sent.size() == 1);  // the re-read still goes out
+  r.c.on_packet(held.data(), held.size(), 4050);
+  CHECK(r.c.state().rows[2].st == ParamRowState::InProgress);
+  CHECK(r.c.state().pending_row == 2);
+  Bytes fail = ack_pkt("VENC_MODE", 11, wire, PARAM_ACK_FAILED);
+  r.c.on_packet(fail.data(), fail.size(), 4100);
+  CHECK(r.c.state().rows[2].st == ParamRowState::Failed);
+  CHECK(r.c.state().pending_row == -1);
+}
+
 TEST(accepted_rebuild_row_relists) {
   Rig r;
   link_and_complete_list(r, 1000);
