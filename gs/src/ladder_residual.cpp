@@ -1,5 +1,7 @@
 #include "ladder_residual.h"
 
+#include <algorithm>
+
 namespace maburgs {
 
 // The BASE layer's post-FEC loss, from the FEC decoder's own abandonment
@@ -31,7 +33,8 @@ namespace maburgs {
 // abandoned also folds in syms_retx: a symbol a NACK retransmit filled
 // (or cascade-solved off a repair row) is video-whole but its direct copy
 // never arrived, and the stats book that as loss. The ladder's own input
-// does not (ladder_residual_counts below). syms_retx has no stale split: a
+// books it as link.nack_residual says (ladder_residual_counts below; the
+// default counts it arrived). syms_retx has no stale split: a
 // retx filling a pre-transition seq counts as current residual loss even
 // under `cur` (negligible -- the drone only answers seqs within ring_ms,
 // and a transition gap is a handful of symbols).
@@ -58,18 +61,53 @@ int delivery_pct(ResidualCounts rc) {
   return static_cast<int>(pct > 100 ? 100 : pct);
 }
 
-// The ladder demotes on what the decoder could not repair, and on nothing
-// else. A symbol a NACK retransmit filled counts as ARRIVED here: the drone
-// answers a request with a burst of resends that race the frame's own FEC
-// repairs, and the ones that land first fill symbols the repairs would have
-// solved a few milliseconds later. Booked as loss, each of them cost a rung
-// on a link that abandons nothing with the NACK off.
-ResidualCounts ladder_residual_counts(const mabur::UepDecoder& dec) {
+std::optional<NackResidual> parse_nack_residual(const std::string& s) {
+  if (s == "filled") return NackResidual::kFilled;
+  if (s == "all") return NackResidual::kAll;
+  if (s == "timely") return NackResidual::kTimely;
+  return std::nullopt;
+}
+
+const char* nack_residual_name(NackResidual m) {
+  switch (m) {
+    case NackResidual::kFilled: return "filled";
+    case NackResidual::kAll: return "all";
+    case NackResidual::kTimely: return "timely";
+  }
+  return "filled";
+}
+
+// The ladder demotes on what the decoder could not repair, and on the
+// retransmit-filled symbols `mode` books as lost:
+//   kFilled: none. The drone answers a request with a burst of resends that
+//     race the frame's own FEC repairs, and the ones that land first fill
+//     symbols the repairs would have solved a few milliseconds later. Booked
+//     as loss, each of them cost a rung on a link that abandons nothing with
+//     the NACK off.
+//   kAll: every one, as residual_counts does. On a link with sustained loss
+//     kFilled holds a rung whose holes only the retransmits fill, and the
+//     retransmits spend air on that same failing rung.
+//   kTimely: the ones that filled after the NACK tracker's deadline for
+//     their seq (gap_timeout_ms after it was first seen missing, the frame
+//     stream's own gap timeout): such a fill came too late to save its
+//     frame. late_fills <= syms_retx by construction (a late fill is a seq
+//     the decoder holds as kRetx, and every kRetx seq booked one syms_retx);
+//     the min() only keeps a counter mismatch from wrapping.
+// expected is the same under every mode, so a mode moves symbols between
+// arrived and lost and never changes the window's denominator.
+ResidualCounts ladder_residual_counts(const mabur::UepDecoder& dec,
+                                      NackResidual mode, uint64_t late_fills) {
   const auto s = dec.stats(0);
   const uint64_t abandoned = s.syms_abandoned - s.syms_abandoned_stale;
   const uint64_t expected =
       s.syms_delivered + s.syms_recovered + s.syms_retx + abandoned;
-  return ResidualCounts{expected - abandoned, expected};
+  uint64_t lost = abandoned;
+  switch (mode) {
+    case NackResidual::kFilled: break;
+    case NackResidual::kAll: lost += s.syms_retx; break;
+    case NackResidual::kTimely: lost += std::min(late_fills, s.syms_retx); break;
+  }
+  return ResidualCounts{expected - lost, expected};
 }
 
 }  // namespace maburgs

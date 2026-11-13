@@ -13,8 +13,9 @@ already waits before it truncates a frame. FEC overhead, the rung table and
 the two-card receive diversity are untouched: the NACK only removes the
 truncations and base smears that happen while the ladder is still deciding.
 It is **repair only**. A symbol a retransmit filled is loss in the stats
-and in the ladder's pre-FEC util, but not in the ladder's residual input:
-the resends race the frame's own FEC repairs, and the ones that land first
+and in the ladder's pre-FEC util. In the ladder's residual input it counts
+as `link.nack_residual` says (see Accounting); by default as arrived: the
+resends race the frame's own FEC repairs, and the ones that land first
 fill symbols the repairs would have solved anyway
 (`docs/findings/2026-11-11-nack-residual.md`). Base layer only; the wire carries a `sid` byte so enh can
 follow, but the drone refuses any `sid != 0` today.
@@ -163,7 +164,14 @@ lookback  = 256      # symbols behind newest the erasure view scans; 8..4096, mu
 repeat_ms = 16       # 1..1000
 max_tries = 2        # 0..16; 0 = observe only
 min_lead_ms = 12     # 1..100; withhold a request this close to the deadline
+
+[link]
+nack_residual = "filled"   # "filled" | "all" | "timely": what a fill counts as in the ladder's residual
 ```
+
+`nack_residual` is a `[link]` key, not a `[link.nack]` one: it decides what
+the ladder reads, and with the NACK off there are no fills, so the three
+values read the same. Any other value fails boot.
 
 ## Drone: ring, handler, bucket
 
@@ -260,9 +268,23 @@ burst_ms = 20   # bucket depth, ms of air at the current op; 1..200
 - **Residual.** The stats' residual (`residual_counts` in
   `gs/src/ladder_residual.cpp`) is `abandoned + syms_retx`: a retx-filled
   symbol counts as loss even if its direct copy arrives later. The ladder's
-  inputs (`ladder_residual_counts`, the s3 path in
-  `gs/src/link_health.cpp`) use `abandoned` alone and count a retx-filled
-  symbol as arrived.
+  base input (`ladder_residual_counts`) has the same denominator and books
+  a retx-filled symbol by `link.nack_residual`:
+  - `"filled"` (default): arrived; the residual is `abandoned` alone.
+  - `"all"`: lost, as in the stats' residual: the ladder demotes as it
+    would with no retransmit. On a link with sustained loss `"filled"`
+    holds a rung whose holes only the retransmits fill, and they spend
+    air on that same rung.
+  - `"timely"`: arrived when the tracker saw the fill by the entry's
+    deadline (`gap_ms(0)` after `t0`, see Deadline), lost when later: a
+    late fill no longer saves its frame. The tracker counts those as
+    `filled_late` (a fill whose entry booked `dropped_deadline` or that is
+    first seen past the deadline); the ladder reads the cumulative count.
+    The tracker polls before the ladder's tick, so a late fill and the
+    decoder's `syms_retx` for it land in the same window.
+
+  The enh (s3) path counts a retx-filled symbol as arrived; enh has no
+  retransmits.
 - **Latency anchor.** When fragment 0 of an AU arrived in a retx body
   (`hdr_retx`), the enc/q anchor sample is withheld: its stamps describe
   the original send, a NACK round trip earlier.
@@ -270,7 +292,8 @@ burst_ms = 20   # bucket depth, ms of air at the current op; 1..200
   one of `filled` (Retx), `late_fill` (Direct), `wasted` (Recovered) when
   it resolves, and `dropped_deadline` when it is still Unknown at the
   deadline or falls below the floor. A seq that booked `dropped_deadline`
-  and resolves later also books `filled`/`late_fill`/`wasted`, so the
+  and resolves later also books `filled`/`late_fill`/`wasted` (a fill then
+  also books `filled_late`), so the
   outcomes can sum above `syms_requested` under congestion. A requested
   seq the stop rule killed still books `dropped_deadline` at the
   deadline/floor. `suppressed` counts polls, not symbols.

@@ -66,7 +66,8 @@ namespace {
 maburgs::LinkHealthCfg lh_cfg(const maburgs::Config& cfg) {
   const auto enh = cfg.uep_layers()[1];
   return {1, enh.blocks_per_body,
-          static_cast<int>(mabur::sw::kSwHeaderLen) + enh.fec.symbol_size};
+          static_cast<int>(mabur::sw::kSwHeaderLen) + enh.fec.symbol_size, {},
+          cfg.link.nack_residual};
 }
 }  // namespace
 
@@ -357,8 +358,9 @@ void WebGs::reset_video_() {
 
 // maburgs main.cpp's NACK block: base-layer
 // selective repeat. Direct send, mid-burst -- never the RcfSlotter (bench:
-// slotted fill p50 44 ms, past the gap timeout). Option A: the retransmit
-// fixes the video only; every ladder input still books the loss. No
+// slotted fill p50 44 ms, past the gap timeout). The pre-FEC util still
+// books the loss; the ladder's residual books a fill as link.nack_residual
+// says, and reads filled_late from this poll, so it runs before lha_.tick. No
 // calibration radio-silence gate here: the page has no calibration.
 void WebGs::poll_nack_(uint64_t now_ms) {
   const auto sctx = vrx_->session_ctx();
@@ -510,6 +512,7 @@ void WebGs::tick(uint64_t now_us) {
   } else {
     in.op = spotter_op_;
   }
+  if (nack_) in.nack_late_fills = nack_->stats().filled_late;
   const auto lh = lha_.tick(now_ms, agg_, in);
   last_health_ = lh.health;
   const std::vector<uint8_t>* sent = nullptr;

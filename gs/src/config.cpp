@@ -409,7 +409,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
                 "s3_settle_ms", "s3_min_syms",
                 "rung_stats", "fade", "probe",
                 "rcf_slot_hold_ms", "arrival_guard_syms",
-                "nack",
+                "nack", "nack_residual",
                 "key_file", "key"});
     c.link.key_file = get_str(r, "key_file", "/etc/mabur.key", "link");
     // Read by presence: link.key is an optional web-overlay key,
@@ -583,6 +583,12 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     if (c.link.nack.lookback >= c.fec.seq_horizon)
       fail("link.nack.lookback", "must be < fec.seq_horizon (" +
                                      std::to_string(c.fec.seq_horizon) + ")");
+    {
+      const std::string nr = get_str(r, "nack_residual", "filled", "link");
+      const auto m = parse_nack_residual(nr);
+      if (!m) fail("link.nack_residual", "must be \"filled\", \"all\" or \"timely\"");
+      c.link.nack_residual = *m;
+    }
 
     if (r.contains("rung_stats")) {
       const Value& rs = r["rung_stats"];

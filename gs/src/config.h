@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "ladder_controller.h"
+#include "ladder_residual.h"
 #include "mabur/channel_set.h"
 #include "mabur/link_key.h"
 #include "mabur/uep_encoder.h"
@@ -184,6 +185,11 @@ struct LinkCfg {
   // Software NACK, base layer (docs/fec-nack.md). Optional
   // [link.nack]: absent = off. lookback < fec.seq_horizon (checked).
   mabur::NackCfg nack;
+  // What a NACK-filled base symbol counts as in the ladder's residual
+  // (ladder_residual.h): "filled" (arrived), "all" (lost), "timely" (arrived
+  // when it beat the tracker's deadline). Independent of [link.nack]: with
+  // the NACK off there are no fills and the three read the same.
+  NackResidual nack_residual = NackResidual::kFilled;
   // Static-link mode: when static_mcs >= 0 the adaptive controller is
   // bypassed entirely and every RCF commands exactly this MCS/FEC overhead
   // (HT, 20 MHz). Rendezvous/keep-alive/failsafe machinery is unaffected.

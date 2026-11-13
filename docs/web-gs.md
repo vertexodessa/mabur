@@ -1327,8 +1327,9 @@ Per `tick()`, after the FrameStream poll:
 There is no calibration radio-silence gate (the page has no calibration). There is also no
 `hdr_retx` latency-anchor rule (the page's capture→glass uses the RTT pts
 offset, not a first-fragment anchor). The `FragArrival` carries
-`sw_seq`/`retx`, which is what makes the tail trigger live. As on maburgs
-(Option A), a retransmit-filled symbol still counts as loss for the ladder.
+`sw_seq`/`retx`, which is what makes the tail trigger live. As on maburgs, a
+retransmit-filled symbol counts in the ladder's residual as `link.nack_residual`
+says (`docs/fec-nack.md` "Accounting").
 Over the CPE relay radio the request rides the relay's TX round trip.
 
 Readout is the Debug tab's NACK group (Stats panel, above); the switch is

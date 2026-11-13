@@ -322,9 +322,11 @@ case.
 **Inputs.**
 - **Residual inputs** are post-FEC abandonment (`syms_abandoned`, via
   `gs/src/ladder_residual.cpp`): base only for s1, enh for s3. A symbol
-  filled by a NACK retransmit counts as arrived here: the ladder steps on
-  what the decoder could not repair, not on which copy of a symbol came
-  first (`docs/fec-nack.md`).
+  filled by a NACK retransmit counts as `link.nack_residual` says: by
+  default as arrived (the ladder steps on what the decoder could not
+  repair, not on which copy of a symbol came first), with `"all"` as lost,
+  with `"timely"` as lost only when the fill came after the NACK deadline
+  (`docs/fec-nack.md` "Accounting").
 - **Util inputs** are pre-FEC source-symbol loss booked at ARRIVAL by
   `SwDecoder`'s `mabur::ArrivalTracker`. Each source seq is booked once,
   when it crosses a settle line `link.arrival_guard_syms` (default 192)

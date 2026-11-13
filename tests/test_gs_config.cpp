@@ -340,6 +340,31 @@ TEST(link_nack_section_parses_and_defaults_off) {
   CHECK(wide.link.nack.lookback == 600);
 }
 
+TEST(link_nack_residual_parses_three_values_and_refuses_others) {
+  auto dflt = maburgs::load_config(write_tmp(""));
+  CHECK(dflt.link.nack_residual == maburgs::NackResidual::kFilled);
+  auto f = maburgs::load_config(write_tmp("[link]\nnack_residual = \"filled\"\n"));
+  CHECK(f.link.nack_residual == maburgs::NackResidual::kFilled);
+  auto a = maburgs::load_config(write_tmp("[link]\nnack_residual = \"all\"\n"));
+  CHECK(a.link.nack_residual == maburgs::NackResidual::kAll);
+  auto t = maburgs::load_config(write_tmp("[link]\nnack_residual = \"timely\"\n"));
+  CHECK(t.link.nack_residual == maburgs::NackResidual::kTimely);
+  const std::string bad = what_of([] {
+    maburgs::load_config(write_tmp("[link]\nnack_residual = \"late\"\n"));
+  });
+  CHECK(bad.find("link.nack_residual") != std::string::npos);
+  CHECK(bad.find("must be") != std::string::npos);
+  const std::string num = what_of([] {
+    maburgs::load_config(write_tmp("[link]\nnack_residual = 1\n"));
+  });
+  CHECK(num.find("link.nack_residual") != std::string::npos);
+  // A [link] key, not a [link.nack] one.
+  const std::string nested = what_of([] {
+    maburgs::load_config(write_tmp("[link.nack]\nresidual = \"all\"\n"));
+  });
+  CHECK(!nested.empty());
+}
+
 TEST(nack_disabled_sends_nothing) {
   // Config off => the exporter never sees a block and the tracker is never
   // constructed enabled; pinned here at the config/exporter seam, and in
