@@ -41,12 +41,18 @@ enum CalFlag : uint32_t {
   kCalLossy = 1u << 7,          // too few frames arrived to trust the count
   kCalLost = 1u << 8,           // under half arrived: measured the loss, not written
   kCalShortSpan = 1u << 9,      // too few frames or too short a span to time: eff over the dwell
+  kCalBridged = 1u << 10,       // the run passed a single failing cell that had clean cells above it
+  kCalUnderFaster = 1u << 11,   // the wall sits under a faster rate's wall (mark_under_faster)
 };
 
 struct CalThresholds {
   double deliver_pct = 90.0;    // the >=90% in "first contiguous >=90% run"
   double sat_rssi_dbm = -45.0;  // above this, suspect RX saturation
   int narrow_span = 4;          // wall - floor <= this => kCalNarrow
+  // A single failing cell does not end the run when this many cells right
+  // above it deliver: more power delivered again, so the cell lost its
+  // frames to the channel, not to the PA. 0 = every failing cell ends it.
+  int bridge_clean = 3;
   int card_disagree = 2;        // per-card wall gap beyond this => flag
   int tx_bound_blocked_pct = 50;  // blocked_pct below this => kCalTxBound
   double lossy_ratio = 0.9;       // best-card frames below this * offered => kCalLossy
@@ -68,9 +74,19 @@ struct RateWall {
 // `cells` must be sorted ascending by idx. Returns the wall as the END OF THE
 // FIRST CONTIGUOUS run at or above `deliver_pct`, scanned upward from the
 // sensitivity-floor edge -- never "the last index that happened to be good",
-// which the measured comb makes meaningless.
+// which the measured comb makes meaningless. One exception keeps the run
+// going: a single failing cell with `bridge_clean` delivering cells right
+// above it (kCalBridged). With 20 frames a cell, three frames lost to a
+// burst on the channel fail it; the comb never shows three clean cells in a
+// row straight after its first dip, so the exception does not reach into it.
 RateWall analyze_rate(const std::vector<CalCell>& cells,
                       const CalThresholds& th);
+
+// A slower rate tolerates more transmitter distortion than a faster one, so
+// its compression wall cannot be the lower of the two. A wall under a faster
+// rate's wall was therefore cut short by loss that had nothing to do with
+// power. Such rows get kCalUnderFaster; the walls stay as measured.
+void mark_under_faster(RateWall* walls, size_t n);
 
 // One capacity dwell's tally at a single (mcs, bw) operating point, flown at
 // the production A-MPDU mode rather than the no_agg power/verify frames.
