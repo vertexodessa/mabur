@@ -62,6 +62,10 @@ void NackTracker::resolve(uint64_t now_ms, const NackInputs& in) {
       case S::kRetx:
         if (e.tries > 0) {
           ++stats_.filled;
+          // Past the deadline: either a poll already booked it dropped, or
+          // the fill landed between the deadline and this poll.
+          if (e.deadline_counted || now_ms - e.first_missing_ms > in.gap_timeout_ms)
+            ++stats_.filled_late;
           ++win_.filled;
           if (win_.fill_ms.size() < NackWindow::kMaxFillSamples)  // cap: stop appending
             win_.fill_ms.push_back(static_cast<uint32_t>(now_ms - e.first_sent_ms));
