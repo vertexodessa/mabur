@@ -508,7 +508,12 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
   // gone. (A probe's different MCS is deliberately NOT a term: see rate_e.)
   const double denom = kShareBase * (1.0 + ovb) / rate_b +
                        (1.0 - kShareBase) * (1.0 + ove) / rate_e;
-  const double airtime_budget = knob_airtime_budget_milli_.load(std::memory_order_relaxed) / 1000.0;
+  // The congestion guard's step scales the budget BEFORE the clamp, so
+  // bitrate_min_kbps stays the floor and the target stays a function of
+  // (op, step): a bounded step cannot compound the way the old level-3 cut
+  // did (see run_congestion_guard()).
+  const double airtime_budget = knob_airtime_budget_milli_.load(std::memory_order_relaxed) /
+                                1000.0 * kContentionFactor[contention_step_];
   double kbps = 1000.0 * airtime_budget / denom;
   // NOTE the encoder has its own floor below this one: venc's apply_bitrate
   // rails at VENC_BITRATE_MIN_KBPS (1000), so a configured bitrate_min_kbps
@@ -659,6 +664,70 @@ void RcAgent::run_congestion_guard(uint64_t now_ms, const RadioHealth& health) {
   }
 
   if (changed) reapply_with_shed();
+
+  // Contention step: sheds that the shed alone does not stop. Dropping enh
+  // halves the frame rate, the queue drains, the shed lifts, and if a
+  // neighbour still holds part of the channel the queue refills within about
+  // a second and the next episode starts: half-rate video for as long as the
+  // neighbour stays. Two signs that the channel, not a scene-change
+  // overshoot, is short:
+  //  - re-entry: an episode starts within kContentionReentryMs of the end
+  //    of the previous one (the shed fixed the queue only while it lasted);
+  //  - persistence: queue pressure again kContentionUpMs or more into one
+  //    unbroken episode (the shed does not even fix it while it lasts).
+  // Either drops the airtime budget one step (x0.75 of encoder.airtime_budget
+  // in run_bitrate_policy), at most kContentionMaxStep times (x0.42 at 3),
+  // at least kContentionUpMs apart. An isolated burst sheds for 2-6 s and is
+  // followed by a clean stretch, so it never steps. Recovery is one step per
+  // kContentionDownMs with no shed at all and as long since the last step,
+  // slower than the climb. A step down that a neighbour undoes within
+  // kContentionDownMs costs a keyframe, a third more bitrate into the same
+  // air and the episode that follows, so the wait before the next one
+  // doubles, up to kContentionHoldMaxMs; a step down that holds puts it back.
+  // The MCS is not touched: the ladder judges the RF, this only sizes the
+  // video to the air that is left.
+  //
+  // On Star6E a SetChnAttr that changes the rate emits a keyframe, so every
+  // step is one keyframe; the cadence above bounds that to one per 2 s while
+  // the bitrate falls and one per 10 s while it recovers.
+  const bool shedding = shed_level_ > 0;
+  const bool onset = shedding && !contention_shedding_;
+  // At an onset shed_edge_ms_ still holds the previous episode's end.
+  const bool reentry =
+      onset && have_shed_end_ && now_ms - shed_edge_ms_ <= kContentionReentryMs;
+  const bool persists = shedding && !onset && (drops_rose || txq_pressure) &&
+                        now_ms - shed_edge_ms_ >= kContentionUpMs;
+  if (shedding != contention_shedding_) {
+    contention_shedding_ = shedding;
+    shed_edge_ms_ = now_ms;
+    if (!shedding) have_shed_end_ = true;
+  }
+  const bool step_spaced = !have_step_ms_ || now_ms - step_ms_ >= kContentionUpMs;
+  int step = contention_step_;
+  if ((reentry || persists) && step < kContentionMaxStep && step_spaced) {
+    ++step;
+  } else if (!shedding && step > 0 && now_ms - shed_edge_ms_ >= down_hold_ms_ &&
+             now_ms - step_ms_ >= down_hold_ms_) {
+    --step;
+  }
+  if (step != contention_step_) {
+    const bool down = step < contention_step_;
+    if (have_step_ms_ && last_step_down_) {
+      if (!down && now_ms - step_ms_ <= kContentionDownMs)
+        down_hold_ms_ = std::min(down_hold_ms_ * 2, kContentionHoldMaxMs);
+      else
+        down_hold_ms_ = kContentionDownMs;
+    }
+    last_step_down_ = down;
+    contention_step_ = step;
+    step_ms_ = now_ms;
+    have_step_ms_ = true;
+    std::fprintf(stderr, "rc: contention step %d (airtime x%.3f, %s, next down after %llu ms)\n",
+                 step, kContentionFactor[step],
+                 reentry ? "re-entry" : persists ? "persists" : "clean",
+                 static_cast<unsigned long long>(down_hold_ms_));
+    run_bitrate_policy(now_ms, /*force=*/false);
+  }
 }
 
 void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
