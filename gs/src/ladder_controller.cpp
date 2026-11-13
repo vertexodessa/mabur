@@ -12,6 +12,8 @@ namespace maburgs {
 // that loss changes the bitrate again, so each step pays for the next one. For
 // this long after a change, residual loss does not demote; util demotes still do.
 static constexpr double kRungChangeResidualHoldMs = 1200.0;
+// lock_until_ of a latched rung: later than any clock this process will see.
+static constexpr double kLatched = 1e18;
 
 const char* to_string(CtlReason r) {
   // Lowercase: this is the operator-visible contract (the ctl: stderr line
@@ -51,6 +53,8 @@ LadderController::LadderController(LadderCfg cfg)
   assert(!cfg_.ladder.empty());
   fail_count_.assign(cfg_.ladder.size(), 0);
   penalty_until_.assign(cfg_.ladder.size(), -1e18);
+  strikes_.assign(cfg_.ladder.size(), 0);
+  lock_until_.assign(cfg_.ladder.size(), -1e18);
 }
 
 double LadderController::budget_base() const {
@@ -239,6 +243,35 @@ std::vector<std::pair<int, int>> LadderController::penalized(double now_ms) cons
   return out;
 }
 
+// One strike per loss demote, charged to the rung left. Rung 0 is never
+// left by a demote, so the floor is never locked.
+void LadderController::strike_rung(int rung, double now_ms) {
+  if (cfg_.lockout_ms <= 0) return;
+  const auto r = static_cast<std::size_t>(rung);
+  if (strikes_[r] < cfg_.lockout_latch) ++strikes_[r];
+  lock_until_[r] = strikes_[r] >= cfg_.lockout_latch ? kLatched : now_ms + cfg_.lockout_ms;
+}
+
+bool LadderController::is_locked(int rung, double now_ms) const {
+  return now_ms < lock_until_[static_cast<std::size_t>(rung)];
+}
+
+std::vector<LadderController::Lockout> LadderController::locked(double now_ms) const {
+  std::vector<Lockout> out;
+  for (std::size_t r = 0; r < lock_until_.size(); ++r) {
+    if (now_ms < lock_until_[r]) {
+      const int left = lock_until_[r] == kLatched ? -1 : static_cast<int>(lock_until_[r] - now_ms);
+      out.push_back(Lockout{static_cast<int>(r), left, strikes_[r]});
+    }
+  }
+  return out;
+}
+
+void LadderController::clear_lockout() {
+  std::fill(strikes_.begin(), strikes_.end(), 0);
+  std::fill(lock_until_.begin(), lock_until_.end(), -1e18);
+}
+
 int LadderController::probation_ms_left(double now_ms) const {
   if (probation_active_ && idx_ == probation_rung_ && now_ms < probation_until_ms_) {
     return static_cast<int>(probation_until_ms_ - now_ms);
@@ -357,6 +390,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       penalize_rung(from, now_ms);
       probation_active_ = false;
     }
+    strike_rung(from, now_ms);
     idx_ = from - 1;
     last_down_ms_ = now_ms;
     last_change_ms_ = now_ms;
@@ -479,6 +513,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       penalize_rung(from, now_ms);
       probation_active_ = false;
     }
+    strike_rung(from, now_ms);
     idx_ = from - 1;
     last_down_ms_ = now_ms;
     last_change_ms_ = now_ms;
@@ -520,6 +555,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       const int from = idx_;
       ++counters_.probation_fails;
       penalize_rung(from, now_ms);
+      strike_rung(from, now_ms);
       probation_active_ = false;
       idx_ = from - 1;
       last_down_ms_ = now_ms;
@@ -533,6 +569,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     if (idx_ > 0 && now_ms - confirm_start_ms_ >= eff_confirm_ms(now_ms) &&
         now_ms - last_change_ms_ >= cfg_.min_between_changes_ms) {
       const int from = idx_;
+      strike_rung(from, now_ms);
       idx_ = from - 1;
       last_down_ms_ = now_ms;
       last_change_ms_ = now_ms;
@@ -567,7 +604,8 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
 
   // 6. Clean margin: accrue a clean window and promote once it has been
   // sustained long enough, clear of a recent downgrade and the min-between
-  // gate, with a next rung that exists and isn't penalized.
+  // gate, with a next rung that exists and is neither penalized nor locked.
+  // Promotes go one rung at a time, so the lowest locked rung is a ceiling.
   if (u_ < cfg_.up_util) {
     if (clean_start_ms_ < 0.0) clean_start_ms_ = now_ms;
 
@@ -576,7 +614,8 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
         now_ms - clean_start_ms_ >= cfg_.clean_ms &&
         now_ms - last_down_ms_ >= cfg_.hold_after_down_ms &&
         now_ms - last_change_ms_ >= cfg_.min_between_changes_ms &&
-        !is_penalized(static_cast<int>(next), now_ms)) {
+        !is_penalized(static_cast<int>(next), now_ms) &&
+        !is_locked(static_cast<int>(next), now_ms)) {
       // Probe gate: with a probe commanded, only a
       // clean streak of probe.clean_bodies may commit; Lossy AND NoInfo hold —
       // a commanded-but-absent probe is exactly the blind promote the
@@ -640,6 +679,8 @@ bool LadderController::on_tick(double now_ms) {
 }
 
 void LadderController::restore(int rung, double now_ms) {
+  // The strikes were measured on the channel the hop left.
+  clear_lockout();
   reenter_(rung, now_ms, CtlReason::HopRestore);
 }
 

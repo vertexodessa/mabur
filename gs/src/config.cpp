@@ -404,6 +404,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
                 "static_bw",
                 "ladder", "max_mcs", "down_util", "up_util", "confirm_ms",
                 "clean_ms", "probation_ms", "penalty_base_ms", "penalty_max_ms",
+                "lockout_ms", "lockout_latch",
                 "hold_after_down_ms", "min_between_changes_ms", "feedback_timeout_ms",
                 "starved_confirm_ms", "s3_demote", "s3_down_util",
                 "s3_settle_ms", "s3_min_syms",
@@ -499,6 +500,10 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
         static_cast<int>(get_int(r, "penalty_base_ms", 10000, 0, 600000, "link"));
     c.link.ladder_cfg.penalty_max_ms =
         static_cast<int>(get_int(r, "penalty_max_ms", 60000, 0, 600000, "link"));
+    c.link.ladder_cfg.lockout_ms =
+        static_cast<int>(get_int(r, "lockout_ms", 0, 0, 600000, "link"));
+    c.link.ladder_cfg.lockout_latch =
+        static_cast<int>(get_int(r, "lockout_latch", 4, 1, 100, "link"));
     c.link.ladder_cfg.hold_after_down_ms =
         static_cast<int>(get_int(r, "hold_after_down_ms", 4000, 0, 600000, "link"));
     c.link.ladder_cfg.min_between_changes_ms =

@@ -341,6 +341,22 @@ demote from a rung on probation books a penalty; a fade demote does not. A sampl
 nothing and does not count as feedback; `feedback_timeout_ms` covers that
 case.
 
+**Loss lockout** (`link.lockout_ms`, `link.lockout_latch`; off at
+`lockout_ms = 0`, the default). The penalty above only follows a failed
+probation; a rung that holds its probation and then loses again comes back
+after every `clean_ms` and costs a demote each time. With the lockout on,
+every loss demote (s1 residual, s3 residual, s1 util, s3 util, probation)
+strikes the rung it leaves, once per demote. Strikes below `lockout_latch`
+lock that rung against promotes for `lockout_ms`; strike `lockout_latch`
+latches it. An expired lock keeps its strikes. Fade, starved, timeout and
+re-entry moves strike nothing, and rung 0 is never left by a demote, so the
+floor is never locked. Promotes go one rung at a time, so the lowest locked
+rung is a ceiling; the probe stream keeps running at it. A channel hop's
+restore and a new drone session (`VrxController` adopting a new
+`vtx_nonce`) clear every strike and lock; a ladder swap starts a fresh
+controller; an unpin keeps them. `LadderController::locked()` lists the
+locked rungs (`ms_left` -1 = latched).
+
 **Inputs.**
 - **Residual inputs** are post-FEC abandonment (`syms_abandoned`, via
   `gs/src/ladder_residual.cpp`): base only for s1, enh for s3. A symbol

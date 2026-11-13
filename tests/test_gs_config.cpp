@@ -1109,15 +1109,20 @@ TEST(ladder_threshold_keys_parse_with_defaults) {
   CHECK(cfg.link.ladder_cfg.probation_ms == 3000);
   CHECK(cfg.link.ladder_cfg.penalty_base_ms == 10000);
   CHECK(cfg.link.ladder_cfg.penalty_max_ms == 60000);
+  CHECK(cfg.link.ladder_cfg.lockout_ms == 0);
+  CHECK(cfg.link.ladder_cfg.lockout_latch == 4);
   CHECK(cfg.link.ladder_cfg.hold_after_down_ms == 4000);
   CHECK(cfg.link.ladder_cfg.min_between_changes_ms == 150);
   CHECK(cfg.link.ladder_cfg.feedback_timeout_ms == 1000);
 
   auto cfg2 = maburgs::load_config(write_tmp(
-      "[link]\ndown_util = 0.5\nclean_ms = 4000\npenalty_max_ms = 30000\n"));
+      "[link]\ndown_util = 0.5\nclean_ms = 4000\npenalty_max_ms = 30000\n"
+      "lockout_ms = 30000\nlockout_latch = 3\n"));
   CHECK(cfg2.link.ladder_cfg.down_util > 0.499 && cfg2.link.ladder_cfg.down_util < 0.501);
   CHECK(cfg2.link.ladder_cfg.clean_ms == 4000);
   CHECK(cfg2.link.ladder_cfg.penalty_max_ms == 30000);
+  CHECK(cfg2.link.ladder_cfg.lockout_ms == 30000);
+  CHECK(cfg2.link.ladder_cfg.lockout_latch == 3);
 }
 
 TEST(au_ring_defaults) {

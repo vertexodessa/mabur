@@ -51,6 +51,8 @@ void VrxController::on_rc_frame(const uint8_t* buf, size_t len, double now_ms) {
   peer_caps_ = ack->chip_caps;
   peer_acked_ = true;
   if (adopted_new) {
+    // A new drone session: the loss that struck the rungs was the old one's.
+    ctrl_.clear_lockout();
     seq32_ = 0;
     rcfs_since_adopt_ = 0;
     move_armed_ = true;
