@@ -50,9 +50,14 @@ struct CalThresholds {
   double sat_rssi_dbm = -45.0;  // above this, suspect RX saturation
   int narrow_span = 4;          // wall - floor <= this => kCalNarrow
   // A single failing cell does not end the run when this many cells right
-  // above it deliver: more power delivered again, so the cell lost its
-  // frames to the channel, not to the PA. 0 = every failing cell ends it.
+  // above it deliver at least `bridge_pct`: more power delivered again, so
+  // the cell lost its frames to the channel, not to the PA. 0 = every
+  // failing cell ends it. The cells above must be near-clean (19 of 20), not
+  // merely over the wall threshold: right at the edge a dip followed by
+  // 18 20 19 (a 20 MHz mcs4 sweep) is the slope starting, and passing it put
+  // the wall 4 indices (1 dB) above the old one.
   int bridge_clean = 3;
+  double bridge_pct = 95.0;
   int card_disagree = 2;        // per-card wall gap beyond this => flag
   int tx_bound_blocked_pct = 50;  // blocked_pct below this => kCalTxBound
   double lossy_ratio = 0.9;       // best-card frames below this * offered => kCalLossy
@@ -75,10 +80,11 @@ struct RateWall {
 // FIRST CONTIGUOUS run at or above `deliver_pct`, scanned upward from the
 // sensitivity-floor edge -- never "the last index that happened to be good",
 // which the measured comb makes meaningless. One exception keeps the run
-// going: a single failing cell with `bridge_clean` delivering cells right
-// above it (kCalBridged). With 20 frames a cell, three frames lost to a
-// burst on the channel fail it; the comb never shows three clean cells in a
-// row straight after its first dip, so the exception does not reach into it.
+// going: a single failing cell with `bridge_clean` cells right above it
+// that each deliver `bridge_pct` (kCalBridged). With 20 frames a cell, three
+// frames lost to a burst on the channel fail it; the comb never shows three
+// near-clean cells in a row straight after its first dip, so the exception
+// does not reach into it.
 RateWall analyze_rate(const std::vector<CalCell>& cells,
                       const CalThresholds& th);
 

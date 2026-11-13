@@ -385,6 +385,25 @@ TEST(a_dip_at_the_edge_still_ends_the_run) {
   CHECK((w.flags & kCalBridged) == 0);
 }
 
+// 20 MHz mcs4 of a bench sweep: 16 at idx 18, then 18 20 19, then 14 13 5.
+// The three cells above the dip clear 90 % but not all of them 95 %: the
+// slope is starting, the wall stays under the dip.
+TEST(a_dip_followed_by_cells_just_over_the_threshold_ends_the_run) {
+  std::vector<int> got(59, 20);                                   // -41..17
+  got.insert(got.end(), {16, 18, 20, 19, 14, 13, 5, 2, 0});       // 18..26
+  got.resize(105, 0);
+  auto w = analyze_rate(row20(got), CalThresholds{});
+  CHECK(w.wall == 17);
+  CHECK((w.flags & kCalBridged) == 0);
+
+  // REVERT CHECK: with the clean bar at the wall threshold it was passed.
+  CalThresholds loose;
+  loose.bridge_pct = 90.0;
+  w = analyze_rate(row20(got), loose);
+  CHECK(w.wall == 21);
+  CHECK((w.flags & kCalBridged) != 0);
+}
+
 TEST(two_failing_cells_in_a_row_end_the_run) {
   std::vector<int> got(105, 20);
   got[30] = got[31] = 15;  // idx -11 and -10

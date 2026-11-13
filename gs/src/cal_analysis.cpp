@@ -24,9 +24,9 @@ struct Run {
 
 // End of the first contiguous run at or above threshold, scanning up from the
 // first cell that reaches it. A single failing cell with `bridge_clean`
-// delivering cells right above it does not end the run.
+// cells right above it that each reach `bridge_pct` does not end the run.
 Run first_run(const std::vector<CalCell>& cells, int card, double pct,
-              int bridge_clean) {
+              int bridge_clean, double bridge_pct) {
   size_t i = 0;
   while (i < cells.size() && delivery_pct(cells[i], card) < pct) ++i;
   Run run;
@@ -41,7 +41,7 @@ Run first_run(const std::vector<CalCell>& cells, int card, double pct,
     }
     bool clean_above = clean > 0 && i + clean < cells.size();
     for (size_t k = 1; clean_above && k <= clean; ++k)
-      clean_above = delivery_pct(cells[i + k], card) >= pct;
+      clean_above = delivery_pct(cells[i + k], card) >= bridge_pct;
     if (!clean_above) break;
     ++run.bridged;
     ++i;
@@ -88,7 +88,7 @@ RateWall analyze_rate(const std::vector<CalCell>& cells,
   if (peak != kRssiNone && static_cast<double>(peak) > th.sat_rssi_dbm)
     out.flags |= kCalSaturated;
 
-  const Run run = first_run(cells, best, th.deliver_pct, th.bridge_clean);
+  const Run run = first_run(cells, best, th.deliver_pct, th.bridge_clean, th.bridge_pct);
   const int floor_idx = run.floor_idx, wall = run.wall;
   out.floor_idx = floor_idx;
   if (run.bridged > 0) out.flags |= kCalBridged;
@@ -132,7 +132,7 @@ RateWall analyze_rate(const std::vector<CalCell>& cells,
   for (const auto& c : cells)
     if (c.received[static_cast<size_t>(other)] > 0) other_has_data = true;
   if (other_has_data) {
-    const Run orun = first_run(cells, other, th.deliver_pct, th.bridge_clean);
+    const Run orun = first_run(cells, other, th.deliver_pct, th.bridge_clean, th.bridge_pct);
     if (orun.floor_idx != kNoWall && std::abs(orun.wall - wall) > th.card_disagree)
       out.flags |= kCalCardDisagree;
   }
