@@ -3403,6 +3403,25 @@ TEST(low_power_exits_on_armed_and_reenters_on_disarm) {
   CHECK(act.fps.back() == 60);
 }
 
+// The maint lane and the update's swap script tell "the FC says disarmed"
+// from "nothing heard": only a fresh report is either.
+TEST(arm_report_is_fresh_or_nothing) {
+  Config cfg = make_cfg();
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  CHECK(!agent.arm_report(1000, 3000).has_value());
+  agent.note_arm_state(false, 1000);
+  CHECK(agent.arm_report(1000, 3000) == std::optional<bool>(false));
+  CHECK(agent.arm_report(4000, 3000) == std::optional<bool>(false));
+  CHECK(!agent.arm_report(4001, 3000).has_value());
+  CHECK(!agent.armed_now(2000, 3000));
+  agent.note_arm_state(true, 5000);
+  CHECK(agent.arm_report(5500, 3000) == std::optional<bool>(true));
+  CHECK(agent.armed_now(5500, 3000));
+  CHECK(!agent.arm_report(8001, 3000).has_value());
+  CHECK(!agent.armed_now(8001, 3000));
+}
+
 // LP-2b. Fail open is unchanged by re-entry: after an arm, the FC going
 // SILENT (crash kills its power, UART dies) must NOT re-enter low power --
 // staleness means full rate, however long the silence lasts.
