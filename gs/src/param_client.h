@@ -178,6 +178,10 @@ class ParamClient {
   uint64_t set_send_ms_ = 0;            // when the SET, or the last resend, went out
   int set_resends_ = 0;                 // resends already sent for the pending set
   bool set_in_progress_ = false;        // the pending row has seen its first IN_PROGRESS
+  // The set changes the row's held value, so a re-read showing set_value_
+  // proves the apply. Setting the value already held proves nothing: that
+  // set ends only on the drone's own ACCEPTED or FAILED.
+  bool set_reread_proves_ = false;
   uint64_t set_deadline_ms_ = 0;        // first IN_PROGRESS + kParamFinalMs; valid iff set_in_progress_
 
   // A long STATUSTEXT being reassembled from its chunks (text_id_ 0: none).

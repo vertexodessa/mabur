@@ -173,7 +173,8 @@ void ParamClient::on_packet(const uint8_t* p, size_t n, uint64_t now_ms) {
       changed = true;
       // The drone sends the final ACCEPTED once; when the air drops it, the
       // re-read tick() sends while InProgress finds the published value.
-      if (idx == state_.pending_row && set_in_progress_ && same_value(val, set_value_)) {
+      if (idx == state_.pending_row && set_in_progress_ && set_reread_proves_ &&
+          same_value(val, set_value_)) {
         accept_pending(static_cast<size_t>(idx), now_ms);
       }
       if (state_.list == ParamListState::Pending || state_.list == ParamListState::Partial) {
@@ -389,6 +390,8 @@ bool ParamClient::set(size_t row, const std::string& text, uint64_t now_ms, std:
     if (!mabur::paramval::parse_text(tbl_row.type, text, &v)) {
       reason = std::string("bad value for ") + type_name(tbl_row.type);
     } else {
+      set_reread_proves_ =
+          !(state_.rows[row].have_value && same_value(state_.rows[row].value, v));
       send_set_packet(row, v);
       state_.rows[row].st = ParamRowState::Sending;
       // A new set owns the row's result: an earlier reason must not
