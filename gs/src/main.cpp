@@ -742,7 +742,8 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
   // LinkHealth lives in LinkHealthAssembler (gs/src/link_health.h), shared
   // with the web GS. The hop verdict's own s1 loss window is ChannelCore's.
   maburgs::LinkHealthAssembler lha(
-      maburgs::LinkHealthCfg{n_cards, probe_bpb, probe_block_payload, snr_ok});
+      maburgs::LinkHealthCfg{n_cards, probe_bpb, probe_block_payload, snr_ok,
+                             cfg.link.nack_residual});
   // Per-body probe log, alongside ctl.log and au.log in the same session
   // directory (DebugSession). Declared here, before FrameStream/au_log
   // below, and emplaced later once debug_log.enable is known.
@@ -1413,8 +1414,9 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
 #endif
     // Software NACK: base-layer selective repeat. Direct send, mid-burst --
     // never the RcfSlotter (bench: slotted
-    // fill p50 44 ms, past the gap timeout). By design the retransmit fixes
-    // the video only; every ladder input still books the loss.
+    // fill p50 44 ms, past the gap timeout). The pre-FEC util still books
+    // the loss; the ladder's residual books a fill as link.nack_residual
+    // says, and reads filled_late from this poll, so it runs before lha.tick.
     if (nack_on) {
       const auto sctx = vrx.session_ctx();
       // != 0: session_ctx() keeps reporting the held nonce in BEACONING.
@@ -1613,7 +1615,8 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
     // Ladder input: every window + the LinkHealth build, gs/src/link_health.cpp.
     const auto lh = lha.tick(now_ms, agg,
                              maburgs::LinkHealthInputs{vrx.cur_op(), vrx.probe_profile(),
-                                                       vrx.ctl().probe_rung()});
+                                                       vrx.ctl().probe_rung(),
+                                                       nack.stats().filled_late});
     if (lh.probe_tail_ms) rcf_slot.set_probe_tail_ms(*lh.probe_tail_ms);
     const maburgs::LinkHealth& health = lh.health;
     // Loss episodes (fec.log): drained every tick whether or not the log is

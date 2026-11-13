@@ -144,7 +144,8 @@ LinkHealthAssembler::Tick LinkHealthAssembler::tick(double now_ms,
   // decoder's own abandonment count, mirroring s3_resid_cur below. See
   // gs/src/ladder_residual.cpp for why this replaced the packet-level
   // delivery window.
-  const auto s1_rc = maburgs::ladder_residual_counts(agg.decoder());
+  const auto s1_rc = maburgs::ladder_residual_counts(
+      agg.decoder(), cfg_.nack_residual, in.nack_late_fills);
   s1_resid_cur_.add(s1_rc.expected, s1_rc.arrived, now_ms);
   const auto s1_rcur_sample = s1_resid_cur_.sample(now_ms);
 

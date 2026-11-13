@@ -24,6 +24,7 @@
 
 #include "aggregator.h"
 #include "ladder_controller.h"
+#include "ladder_residual.h"
 #include "mabur/node.h"
 #include "mabur/rc_proto.h"
 #include "op_point.h"
@@ -39,12 +40,19 @@ struct LinkHealthCfg {
   int probe_bpb = 4;             // cfg.uep_layers()[1].blocks_per_body
   int probe_block_payload = 0;   // kSwHeaderLen + uep_layers()[1].fec.symbol_size
   std::vector<bool> snr_ok;      // per card; empty = all true
+  NackResidual nack_residual = NackResidual::kFilled;  // cfg.link.nack_residual
 };
 
 struct LinkHealthInputs {        // the commanded state this tick
   OpPoint op;
   uint8_t probe_profile = mabur::rc::kNoProbeProfile;
   int probe_rung = -1;
+  // NackStats::filled_late, cumulative; 0 without a NACK tracker. Read by
+  // the residual only under NackResidual::kTimely. The tracker must have
+  // polled after this tick's drain: a late fill un-books an arrival the
+  // decoder booked, and a window that saw the arrival first would read the
+  // drop as a counter reset.
+  uint64_t nack_late_fills = 0;
 };
 
 class LinkHealthAssembler {

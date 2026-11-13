@@ -106,6 +106,28 @@ TEST(fill_attribution_filled_late_wasted) {
   CHECK(t.outstanding() == 0);
 }
 
+TEST(fill_past_the_deadline_books_filled_late) {
+  // gap_timeout 50 from t0 = 1000. 100 fills in time; 101 is seen dropped at
+  // 1060 and fills at 1070; 102 fills between the deadline and the next
+  // poll, so no poll ever saw it unknown past the deadline.
+  World w; w.lose({100, 101, 102});
+  NackTracker t(cfg_on());
+  CHECK(!t.poll(1000, w.in()).has_value());
+  REQUIRE(t.poll(1012, w.in()).has_value());
+  w.st[100] = S::kRetx;
+  t.poll(1040, w.in());
+  CHECK(t.stats().filled == 1 && t.stats().filled_late == 0);
+  t.poll(1049, w.in());                                // 102 unknown, inside the deadline
+  w.st[102] = S::kRetx;
+  t.poll(1060, w.in());
+  CHECK(t.stats().filled == 2 && t.stats().filled_late == 1);
+  CHECK(t.stats().dropped_deadline == 1);              // 101
+  w.st[101] = S::kRetx;
+  t.poll(1070, w.in());
+  CHECK(t.stats().filled == 3 && t.stats().filled_late == 2);
+  CHECK(t.stats().dropped_deadline == 1);              // booked once, not again on the fill
+}
+
 TEST(deadline_drops_without_retry) {
   World w; w.lose({100});
   NackTracker t(cfg_on());

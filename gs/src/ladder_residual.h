@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <string>
 
 #include "mabur/uep_decoder.h"
 
@@ -31,10 +33,25 @@ ResidualCounts residual_counts_pooled(const mabur::UepDecoder& dec, bool cur);
 // Post-FEC delivery as a percent in [0,100]; 100 when nothing was expected.
 int delivery_pct(ResidualCounts rc);
 
+// What a base symbol a NACK retransmit filled counts as in the ladder's
+// residual (link.nack_residual):
+//   kFilled -- arrived (the default);
+//   kAll    -- lost, as if no retransmit had come (what residual_counts books);
+//   kTimely -- arrived when the fill beat the NACK tracker's deadline for its
+//              seq, lost when it landed after (NackStats::filled_late).
+enum class NackResidual : uint8_t { kFilled, kAll, kTimely };
+
+// The config spelling: "filled", "all", "timely"; nullopt for anything else.
+std::optional<NackResidual> parse_nack_residual(const std::string& s);
+const char* nack_residual_name(NackResidual m);
+
 // The ladder's block-4 instant-demote input: BASE, current rung, the
-// decoder's abandonment alone (a retx-filled symbol counts as arrived, unlike
-// in residual_counts). Named separately so the demote path's scope is
+// decoder's abandonment plus the retx-filled symbols `mode` books as lost.
+// late_fills is the NACK tracker's cumulative NackStats::filled_late, read
+// only under kTimely. Named separately so the demote path's scope is
 // greppable -- picking the wrong measure here is a bug this has had before.
-ResidualCounts ladder_residual_counts(const mabur::UepDecoder& dec);
+ResidualCounts ladder_residual_counts(const mabur::UepDecoder& dec,
+                                      NackResidual mode = NackResidual::kFilled,
+                                      uint64_t late_fills = 0);
 
 }  // namespace maburgs
