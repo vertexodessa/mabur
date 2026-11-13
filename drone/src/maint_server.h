@@ -33,6 +33,18 @@ using MaintSpawn = std::function<std::unique_ptr<MaintChild>(const std::string& 
 // must outlive maburd (the update's swap script) detaches itself with setsid.
 std::unique_ptr<MaintChild> spawn_shell(const std::string& cmd);
 
+// The FC's arm state for scripts on the drone: the update's swap script
+// rolls back or restarts maburd only on a drone known to be disarmed.
+// kArmStateFile holds one word and a newline: "armed", "disarmed", or
+// "unknown" when no arm report is fresh (no FC link, MSP off). maburd's
+// maint thread keeps it current.
+enum class ArmState { kUnknown, kDisarmed, kArmed };
+inline constexpr const char* kArmStateFile = "/tmp/mabur.arm";
+const char* arm_state_word(ArmState s);
+// Replaces `path` with the state's word through a rename, so a reader sees
+// the old word or the new one, never a part. False when it cannot.
+bool write_arm_state(const char* path, ArmState s);
+
 struct MaintServerCfg {
   int idle_ms = 30000;           // no frame of the session this long: killed
   uint16_t max_lease_ms = 10000;  // a video-off lease is clamped to this

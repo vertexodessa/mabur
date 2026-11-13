@@ -2304,9 +2304,20 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     std::vector<mabur::maint::Frame> out;
     uint64_t sessions = 0;
     constexpr uint64_t kArmStaleMs = 3000;
+    // The arm state file is rewritten on a change and once a second, so a
+    // deleted file comes back.
+    std::optional<ArmState> arm_written;
+    uint64_t arm_rewrite_ms = 0;
     while (!g_devourer_should_stop) {
       const uint64_t now = now_steady_ms();
-      const bool armed = agent.armed_now(now, kArmStaleMs);
+      const std::optional<bool> arm = agent.arm_report(now, kArmStaleMs);
+      const bool armed = arm.value_or(false);
+      const ArmState arm_state =
+          !arm ? ArmState::kUnknown : (*arm ? ArmState::kArmed : ArmState::kDisarmed);
+      if (arm_state != arm_written || now >= arm_rewrite_ms) {
+        if (write_arm_state(kArmStateFile, arm_state)) arm_written = arm_state;
+        arm_rewrite_ms = now + 1000;
+      }
       while (maint_queue.pop(body)) {
         if (auto f = mabur::maint::parse(body.data(), body.size())) srv.on_frame(*f, now, armed);
       }

@@ -369,13 +369,20 @@ class RcAgent {
   // armed", which separates a pre-flight drone from a downed one. NOT a
   // policy input -- low_power() deliberately does not read it.
   bool armed_latched() const { return armed_latched_; }
-  // The FC reported ARMED in its last arm report and that report is at most
-  // stale_ms old. Any thread: reads only the MSP thread's handoff word.
-  bool armed_now(uint64_t now_ms, uint64_t stale_ms) const {
+  // The FC's last arm report (true = ARMED) when it is at most stale_ms old;
+  // nullopt with no report that fresh (no FC link, MSP off). Any thread:
+  // reads only the MSP thread's handoff word.
+  std::optional<bool> arm_report(uint64_t now_ms, uint64_t stale_ms) const {
     const uint64_t r = arm_report_.load(std::memory_order_relaxed);
-    if (r == 0 || (r & 1u) == 0) return false;
+    if (r == 0) return std::nullopt;
     const uint64_t at = (r >> 1) - 1;
-    return now_ms < at || now_ms - at <= stale_ms;
+    if (now_ms >= at && now_ms - at > stale_ms) return std::nullopt;
+    return (r & 1u) != 0;
+  }
+  // The FC reported ARMED in its last arm report and that report is at most
+  // stale_ms old.
+  bool armed_now(uint64_t now_ms, uint64_t stale_ms) const {
+    return arm_report(now_ms, stale_ms).value_or(false);
   }
 
   // Latched on a BOOT/RENDEZVOUS -> LINKED transition — the process-(re)start

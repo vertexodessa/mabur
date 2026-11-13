@@ -1,3 +1,7 @@
+#include <unistd.h>
+
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include "maint_server.h"
@@ -213,6 +217,26 @@ TEST(spawn_shell_runs_sh_with_pipes_and_reports_the_exit_code) {
     if (!ks) usleep(1000);
   }
   CHECK(ks && *ks == 128 + 9);
+}
+
+// The swap script reads one word; a rename leaves no temp file behind.
+TEST(the_arm_state_file_holds_one_word_per_state) {
+  const std::string path = "/tmp/test_maint_arm." + std::to_string(getpid());
+  const auto read = [&] {
+    std::ifstream f(path);
+    std::stringstream s;
+    s << f.rdbuf();
+    return s.str();
+  };
+  REQUIRE(write_arm_state(path.c_str(), ArmState::kArmed));
+  CHECK(read() == "armed\n");
+  REQUIRE(write_arm_state(path.c_str(), ArmState::kDisarmed));
+  CHECK(read() == "disarmed\n");
+  REQUIRE(write_arm_state(path.c_str(), ArmState::kUnknown));
+  CHECK(read() == "unknown\n");
+  CHECK(access((path + ".tmp").c_str(), F_OK) != 0);
+  CHECK(!write_arm_state("/nonexistent-dir/mabur.arm", ArmState::kArmed));
+  unlink(path.c_str());
 }
 
 MTEST_MAIN

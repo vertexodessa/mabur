@@ -13,6 +13,25 @@ extern char** environ;
 
 using namespace mabur::maint;
 
+const char* arm_state_word(ArmState s) {
+  switch (s) {
+    case ArmState::kArmed: return "armed";
+    case ArmState::kDisarmed: return "disarmed";
+    case ArmState::kUnknown: break;
+  }
+  return "unknown";
+}
+
+bool write_arm_state(const char* path, ArmState s) {
+  const std::string tmp = std::string(path) + ".tmp";
+  const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  if (fd < 0) return false;
+  const std::string word = std::string(arm_state_word(s)) + "\n";
+  const bool ok = ::write(fd, word.data(), word.size()) == static_cast<ssize_t>(word.size());
+  ::close(fd);
+  return ok && ::rename(tmp.c_str(), path) == 0;
+}
+
 namespace {
 
 class PosixChild final : public MaintChild {

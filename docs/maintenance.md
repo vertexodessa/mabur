@@ -63,6 +63,9 @@ and the sender's resends carry it later.
   swap script) detaches itself with `setsid`.
 - no session opens while the FC reports ARMED (a report at most 3 s old);
   arming closes an open session and ends the video lease.
+- `/tmp/mabur.arm` holds the FC's arm state for scripts on the drone, one
+  word: `armed`, `disarmed`, or `unknown` when no arm report is at most 3 s
+  old (no FC link, MSP off). Rewritten on a change and once a second.
 - the video lease is clamped to 10 s; while it runs the hot thread stops
   encoding and sending, as it does for a calibration session. The GS renews
   it; when the GS goes away video comes back by itself.
@@ -81,13 +84,21 @@ what carries the shell, so each step is driven by a maburd that runs:
 1. trial: the script stops the init loop and the old maburd and runs the new
    one from RAM on the new config. Flash is not touched. Without a commit
    within 120 s, or when the new maburd exits, it starts the old one again
-   from flash (`state` = `restored`).
+   from flash (`state` = `restored`). A drone armed when the trial would
+   start is left alone (`state` = `aborted_armed`); one armed during the
+   trial keeps the new maburd until `/tmp/mabur.arm` says `disarmed`, so a
+   rollback never restarts maburd in the air (a power cut boots the old one
+   from flash).
 2. commit: the GS reaches the drone through the new maburd (the shell's
    parent is `/tmp/mabur-up/maburd`) and creates `/tmp/mabur-up/commit`. The
    script deletes the old binary (the overlay has no room for two), copies
    the new files to flash, checks them by sha256 and starts the init loop
-   (`state` = `committed`). A power cut during these seconds can leave the
-   drone without maburd; a PC install recovers it.
+   (`state` = `committed`), once `/tmp/mabur.arm` says `disarmed`. A power
+   cut during these seconds can leave the drone without maburd; a PC install
+   recovers it.
+
+A GS starts an update only while the FC's heartbeat says disarmed: with no
+FC report it does not update at all.
 
 The script and the GS side live in Palianytsia
 (`release/drone/mabur-swap.sh`, `crates/runtime/src/drone_update.rs`).
