@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -58,10 +59,12 @@ TEST(one_pass_samples_every_card_in_order) {
   CHECK(r.cards[0].energy.fa_ofdm == 7 && r.cards[1].energy.fa_ofdm == 9);
   CHECK(r.cards[0].frames.own == 100 && r.cards[1].frames.own == 200);
   CHECK(r.cards[0].channel == 40);
-  // the sequence on a card: survey, nhm read, (energy, frames), nhm arm
+  // the sequence on a card: survey, nhm read, (energy, frames), nhm arm,
+  // and on its refusal the CLM arm over the same span
   const auto& c = g.cards[0]->calls;
-  REQUIRE(c.size() >= 3);
-  CHECK(c[0] == "survey" && c[1] == "read_nhm" && c.back() == "arm_nhm 35000");
+  REQUIRE(c.size() >= 4);
+  CHECK(c[0] == "survey" && c[1] == "read_nhm");
+  CHECK(c[c.size() - 2] == "arm_nhm 35000" && c.back() == "arm_clm 140000");
 }
 
 TEST(nhm_pct_needs_our_own_arm) {
@@ -87,6 +90,30 @@ TEST(dwell_tune_channel_or_period_change_empties_nhm_pct) {
   CHECK(!g.s->sample_once(1450).cards[0].nhm_busy_pct);   // someone else's period
   g.cards[0]->nhm_read = busy_read(35000);
   CHECK(g.s->sample_once(1600).cards[0].nhm_busy_pct.has_value());   // ours again
+}
+
+// A card without the NHM window arms CLM over the same span; its read is
+// taken only while our own arm stands, under the same dwell/tune/channel
+// pins. Revert (no CLM arm): no busy reading on this card at all.
+TEST(a_card_without_nhm_reads_clm_busy_under_the_same_pins) {
+  Rig g(1);
+  g.cards[0]->clm_ok = true;
+  g.cards[0]->clm_read.valid = true; g.cards[0]->clm_read.pct = 42;
+  CHECK(!g.s->sample_once(1000).cards[0].nhm_busy_pct);   // nothing armed yet
+  const WindowRecord r = g.s->sample_once(1150);
+  REQUIRE(r.cards[0].nhm_busy_pct.has_value());
+  CHECK(*r.cards[0].nhm_busy_pct == 42.0);
+  g.gates.dwell_gen[0].fetch_add(1);
+  CHECK(!g.s->sample_once(1300).cards[0].nhm_busy_pct);   // a dwell landed since the arm
+  CHECK(g.s->sample_once(1450).cards[0].nhm_busy_pct.has_value());
+  const auto& c = g.cards[0]->calls;
+  CHECK(std::find(c.begin(), c.end(), "arm_clm 140000") != c.end());
+  CHECK(std::find(c.begin(), c.end(), "read_clm unarmed") == c.end());
+  g.cards[0]->clm_ok = false;                              // a refused arm: nothing to read next
+  g.s->sample_once(1600);
+  const size_t n = c.size();
+  CHECK(!g.s->sample_once(1750).cards[0].nhm_busy_pct);
+  CHECK(std::find(c.begin() + static_cast<long>(n), c.end(), "read_clm") == c.end());
 }
 
 TEST(blocked_off_op_or_not_ready_card_is_invalid_and_disarmed) {

@@ -99,6 +99,8 @@ class RadioFrontend : public LinkCard {
   }
   bool arm_nhm_busy(uint16_t period_4us) override;  // arms the card's NHM window
   NhmBusyRead read_nhm_busy() override;
+  uint32_t arm_clm_busy(uint32_t window_us) override;  // devourer ArmChannelBusy
+  ClmBusyRead read_clm_busy() override;                // empty unless a window is armed
   // Debug: the chip's programmed central channel (RF18 readback), -1 if unknown.
   int tuned_central() override;              // reads it back
   // SPIKE (throwaway): the bench downcasts to peek PHY counters.
@@ -136,6 +138,11 @@ class RadioFrontend : public LinkCard {
   std::thread rx_thread_;
   std::atomic<bool> ready_{false};
   std::atomic<bool> alive_{false};
+  // A CLM window armed and not yet read: devourer answers an unarmed
+  // GetChannelBusy with a fresh NHM sample that drains the FA/CCA delta, so
+  // a read whose window someone else consumed (a scout dwell between the
+  // sampler's arm and read) must not reach it.
+  std::atomic<bool> clm_armed_{false};
   std::atomic<uint64_t> rx_frames_{0};
   std::atomic<uint64_t> foreign_{0};
   std::atomic<uint64_t> tx_frames_{0};

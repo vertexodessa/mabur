@@ -33,4 +33,45 @@ inline uint16_t nhm_period_4us(int ms) {
   return static_cast<uint16_t>(v < 1 ? 1 : v > 65535 ? 65535 : v);
 }
 
+// Which sensor one observation's busy window was armed on: the NHM share
+// above busy_dbm where the card has it (Jaguar3), else CLM busy airtime
+// over the same span (Jaguar1). Without the fallback an RTL8812AU GS read no
+// busy at all: every pick kept the channel it started on and no hop fired.
+enum class BusySensor : uint8_t { kNone, kNhm, kClm };
+struct BusyArm {
+  BusySensor sensor = BusySensor::kNone;
+  uint16_t period_4us = 0;   // the NHM period asked for
+  uint32_t clm_us = 0;       // the CLM window devourer armed
+};
+inline BusyArm arm_busy(ScoutRadio& r, uint16_t period_4us) {
+  BusyArm a;
+  a.period_4us = period_4us;
+  if (r.arm_nhm_busy(period_4us)) {
+    a.sensor = BusySensor::kNhm;
+  } else if ((a.clm_us = r.arm_clm_busy(static_cast<uint32_t>(period_4us) * 4)) != 0) {
+    a.sensor = BusySensor::kClm;
+  }
+  return a;
+}
+// A CLM read is this window's only if it spans the window armed.
+inline std::optional<double> clm_busy_pct(const ClmBusyRead& c, const BusyArm& a) {
+  if (!c.valid || c.window_us != a.clm_us) return std::nullopt;
+  return static_cast<double>(c.pct);
+}
+// The busy % of the window `a` armed, read at the observation's end.
+inline std::optional<double> read_busy(ScoutRadio& r, const BusyArm& a, int busy_dbm) {
+  switch (a.sensor) {
+    case BusySensor::kNhm: {
+      const NhmBusyRead nb = r.read_nhm_busy();
+      if (!nb.valid || nb.period != a.period_4us) return std::nullopt;
+      return nhm_busy_pct(nb, busy_dbm);
+    }
+    case BusySensor::kClm:
+      return clm_busy_pct(r.read_clm_busy(), a);
+    case BusySensor::kNone:
+      break;
+  }
+  return std::nullopt;
+}
+
 }  // namespace maburgs

@@ -373,6 +373,29 @@ NhmBusyRead RadioFrontend::read_nhm_busy() {
   return out;
 }
 
+uint32_t RadioFrontend::arm_clm_busy(uint32_t window_us) {
+  if (!ready_.load(std::memory_order_acquire) || !device_) return 0;
+  // devourer has the NHM window on Jaguar3: a refused NHM arm there is a
+  // failed register batch, not a missing sensor, and a CLM figure in its
+  // place would rank one metric against another.
+  if (caps_.gen == "jaguar3") return 0;
+  const uint32_t us = device_->ArmChannelBusy(window_us);
+  clm_armed_.store(us != 0, std::memory_order_release);
+  return us;
+}
+
+ClmBusyRead RadioFrontend::read_clm_busy() {
+  ClmBusyRead out;
+  if (!clm_armed_.exchange(false, std::memory_order_acq_rel)) return out;
+  if (!ready_.load(std::memory_order_acquire) || !device_) return out;
+  const devourer::ChannelBusy b = device_->GetChannelBusy();
+  out.valid = b.valid && b.valid_busy;
+  out.pct = b.busy_pct;
+  out.window_us = b.window_us;
+  out.own_tx = b.own_tx_in_window;
+  return out;
+}
+
 bool RadioFrontend::send_control(const std::vector<uint8_t>& body) {
   if (!ready_.load(std::memory_order_acquire) || !device_) {
     tx_fail_.fetch_add(1, std::memory_order_relaxed);
@@ -386,6 +409,8 @@ bool RadioFrontend::send_control(const std::vector<uint8_t>& body) {
 }
 
 void RadioFrontend::stop() {
+  // devourer's Stop() forgets an armed window; the reopened device has none.
+  clm_armed_.store(false, std::memory_order_release);
   if (device_ && alive_.load(std::memory_order_acquire)) device_->StopRxLoop();
 #ifdef __EMSCRIPTEN__
   // WebUSB has no transfer cancel (libusb's emscripten backend cancel is a

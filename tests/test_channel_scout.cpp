@@ -21,7 +21,25 @@ struct FakeRadio : ScoutRadio {
   uint16_t armed = 0;
   ScoutFrames fr;
   int64_t last_read = 0;
-  FakeRadio() { std::fill(std::begin(busy_pct_on), std::end(busy_pct_on), -1); }
+  int clm_pct_on[256];               // CLM busy % per channel; -1 (default): no CLM window
+  uint32_t clm_armed_us = 0;
+  FakeRadio() {
+    std::fill(std::begin(busy_pct_on), std::end(busy_pct_on), -1);
+    std::fill(std::begin(clm_pct_on), std::end(clm_pct_on), -1);
+  }
+  uint32_t arm_clm_busy(uint32_t us) override {
+    calls.push_back("arm_clm " + std::to_string(us));
+    clm_armed_us = clm_pct_on[ch] >= 0 ? us : 0;
+    return clm_armed_us;
+  }
+  ClmBusyRead read_clm_busy() override {
+    ClmBusyRead r;
+    if (clm_armed_us == 0) { calls.push_back("read_clm unarmed"); return r; }
+    calls.push_back("read_clm");
+    r.valid = true; r.window_us = clm_armed_us; r.pct = static_cast<uint8_t>(clm_pct_on[ch]);
+    clm_armed_us = 0;
+    return r;
+  }
   bool retune(uint8_t c) override { ch = c; calls.push_back("retune " + std::to_string(c)); return true; }
   bool arm_nhm_busy(uint16_t p) override { armed = p; return busy_pct_on[ch] >= 0; }
   NhmBusyRead read_nhm_busy() override {
@@ -251,6 +269,34 @@ TEST(two_card_proposal_matures_after_min_rounds_and_moves_only_past_the_busy_mar
   CHECK(pr[0] == 144 && pr[1] == 136);
   h.s.set_op(144);                         // the margin is against op: on 144, stay
   CHECK(h.s.proposal() == 144);
+}
+
+// A card without the NHM window (the RTL8812AU) measures busy with CLM over
+// the same dwell, read before the dwell's NHM energy read (which would spoil
+// it). Revert (no CLM fallback): neither pair reads busy and op 136 holds.
+TEST(a_card_without_the_nhm_window_ranks_by_clm_busy) {
+  Rig g(two()); g.s.set_op(136); g.s.set_search(true);
+  g.r.clm_pct_on[136] = 30;                // 136's pair busy; 144 clean
+  g.r.clm_pct_on[144] = 0;
+  for (int i = 0; i < 4; ++i) g.s.run_once();
+  CHECK(g.s.proposal() == 144);
+  const auto& c = g.r.calls;
+  const auto arm = std::find(c.begin(), c.end(), "arm_clm 250000");
+  REQUIRE(arm != c.end());
+  const auto rd = std::find(arm, c.end(), "read_clm");
+  REQUIRE(rd != c.end());
+  CHECK(std::find(arm, rd, "read+nhm") == rd);   // CLM read first
+  CHECK(std::find(c.begin(), c.end(), "read_clm unarmed") == c.end());
+}
+
+// Both windows on a card: NHM is the measure, CLM never armed.
+TEST(nhm_stays_the_busy_measure_where_the_card_has_it) {
+  Rig g(two()); g.s.set_op(136); g.s.set_search(true);
+  g.r.busy_pct_on[136] = 0; g.r.busy_pct_on[144] = 0;
+  g.r.clm_pct_on[136] = 90; g.r.clm_pct_on[144] = 0;
+  for (int i = 0; i < 4; ++i) g.s.run_once();
+  CHECK(g.s.proposal() == 136);            // NHM ties: op holds; CLM's 90 unused
+  for (const auto& x : g.r.calls) CHECK(x.rfind("arm_clm", 0) != 0);
 }
 
 // Width 40 ranks NHM busy first: a pair with fewer frames but more busy

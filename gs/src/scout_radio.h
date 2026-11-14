@@ -32,6 +32,19 @@ struct NhmBusyRead {
   uint16_t period = 0;
 };
 
+// One armed busy-airtime CLM window from devourer (IRadio::GetChannelBusy
+// after ArmChannelBusy): the share of 4 us ticks the baseband held CCA busy,
+// receive-side only. The fallback for a card whose NHM window is not ported
+// (Jaguar1: the RTL8812AU). `window_us` is the window the read covers;
+// `own_tx` = the card transmitted inside it, which reads LOW (the receiver
+// is deaf while its own PA is up).
+struct ClmBusyRead {
+  bool valid = false;
+  uint8_t pct = 0;
+  uint32_t window_us = 0;
+  bool own_tx = false;
+};
+
 // "What does this card support" -- the scan.log C record. Static identity
 // from devourer's AdapterCaps plus the validity flags of one energy read.
 struct CardCaps {
@@ -71,6 +84,13 @@ class ScoutRadio {
   // non-Jaguar3 radios read as "no airtime evidence".
   virtual bool arm_nhm_busy(uint16_t period_4us) { (void)period_4us; return false; }
   virtual NhmBusyRead read_nhm_busy() { return {}; }
+
+  // Busy-airtime CLM window, for a card that refuses arm_nhm_busy: the
+  // window actually armed in us (0 = unsupported). Read only after an arm
+  // that returned nonzero: an unarmed read on devourer takes a 2 ms NHM
+  // sample and drains the FA/CCA delta the dwell is measuring.
+  virtual uint32_t arm_clm_busy(uint32_t window_us) { (void)window_us; return 0; }
+  virtual ClmBusyRead read_clm_busy() { return {}; }
 };
 
 }  // namespace maburgs

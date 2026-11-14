@@ -45,16 +45,14 @@ bool InflightScout::dwell(uint8_t ch, uint8_t back, ScoutDwell& d, HopVisit& vis
   // devourer's GetRxEnergyScout contract).
   (void)radio_->read_energy_scout();
   const uint16_t nhm_period = nhm_period_4us(cfg_.observe_ms);
-  const bool nhm_armed = radio_->arm_nhm_busy(nhm_period);
+  const BusyArm busy_arm = arm_busy(*radio_, nhm_period);
   const ScoutFrames f0 = radio_->frames();
   const int64_t t2 = now_us_();
 
   sleep_ms_(cfg_.observe_ms);
   const int64_t t3 = now_us_();
 
-  const NhmBusyRead nb = nhm_armed ? radio_->read_nhm_busy() : NhmBusyRead{};
-  const std::optional<double> busy =
-      (nb.valid && nb.period == nhm_period) ? nhm_busy_pct(nb, cfg_.busy_dbm) : std::nullopt;
+  const std::optional<double> busy = read_busy(*radio_, busy_arm, cfg_.busy_dbm);
   d.busy_valid = busy.has_value();
   d.busy_pct = busy.value_or(0.0);
 

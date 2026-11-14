@@ -43,16 +43,25 @@ WindowRecord WindowSampler::sample_once(uint64_t now_ms) {
       trackers_[i].invalidate();
       continue;
     }
-    const NhmBusyRead nb = fe.read_nhm_busy();
+    // A CLM window is read only when one is armed (an unarmed CLM read
+    // samples NHM and drains the FA/CCA delta read just below).
+    const bool clm = trackers_[i].clm();
+    const NhmBusyRead nb = clm ? NhmBusyRead{} : fe.read_nhm_busy();
+    const ClmBusyRead cb = clm ? fe.read_clm_busy() : ClmBusyRead{};
     const uint32_t dgen = gates_.dwell_gen[i].load(std::memory_order_acquire);
     const uint32_t tgen = gates_.tune_gen[i].load(std::memory_order_acquire);
-    if (trackers_[i].usable(nb, fe.channel(), dgen, tgen))
+    if (clm) {
+      if (trackers_[i].usable_clm(cb, fe.channel(), dgen, tgen)) s.nhm_busy_pct = static_cast<double>(cb.pct);
+    } else if (trackers_[i].usable(nb, fe.channel(), dgen, tgen)) {
       s.nhm_busy_pct = nhm_busy_pct(nb, cfg_.busy_dbm);
+    }
     s.energy = fe.read_energy_scout();
     s.frames = fe.frames();
     s.channel = fe.channel();
     if (fe.arm_nhm_busy(cfg_.nhm_period_4us))
       trackers_[i].armed(s.channel, cfg_.nhm_period_4us, dgen, tgen);
+    else if (const uint32_t us = fe.arm_clm_busy(static_cast<uint32_t>(cfg_.nhm_period_4us) * 4))
+      trackers_[i].armed_clm(s.channel, us, dgen, tgen);
     else
       trackers_[i].invalidate();
     s.valid = true;

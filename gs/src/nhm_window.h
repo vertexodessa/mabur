@@ -25,22 +25,38 @@ namespace maburgs {
 // and re-enter the armed channel inside one window, which the channel check
 // cannot see; ChannelCore bumps a per-card tune generation around each one
 // and the arm is pinned to that too.
+//
+// A card without the NHM window (Jaguar1) arms CLM instead (armed_clm): the
+// same pins hold, and its read must span the window devourer armed.
 class NhmWindowTracker {
  public:
   void armed(uint8_t ch, uint16_t period, uint32_t dwell_gen, uint32_t tune_gen) {
-    armed_ = true; ch_ = ch; period_ = period; dwell_gen_ = dwell_gen; tune_gen_ = tune_gen;
+    armed_ = true; ch_ = ch; period_ = period; clm_us_ = 0; dwell_gen_ = dwell_gen; tune_gen_ = tune_gen;
   }
-  void invalidate() { armed_ = false; }
+  void armed_clm(uint8_t ch, uint32_t clm_us, uint32_t dwell_gen, uint32_t tune_gen) {
+    armed_ = true; ch_ = ch; period_ = 0; clm_us_ = clm_us; dwell_gen_ = dwell_gen; tune_gen_ = tune_gen;
+  }
+  void invalidate() { armed_ = false; clm_us_ = 0; }
+  // The window in flight is a CLM one: read it with read_clm_busy, and only then.
+  bool clm() const { return armed_ && clm_us_ != 0; }
   bool usable(const NhmBusyRead& r, uint8_t ch_now, uint32_t dwell_gen_now,
               uint32_t tune_gen_now) const {
-    return armed_ && r.valid && r.period == period_ && ch_now == ch_ &&
-           dwell_gen_now == dwell_gen_ && tune_gen_now == tune_gen_;
+    return armed_ && clm_us_ == 0 && r.valid && r.period == period_ &&
+           pinned(ch_now, dwell_gen_now, tune_gen_now);
+  }
+  bool usable_clm(const ClmBusyRead& r, uint8_t ch_now, uint32_t dwell_gen_now,
+                  uint32_t tune_gen_now) const {
+    return clm() && r.valid && r.window_us == clm_us_ && pinned(ch_now, dwell_gen_now, tune_gen_now);
   }
 
  private:
+  bool pinned(uint8_t ch_now, uint32_t dwell_gen_now, uint32_t tune_gen_now) const {
+    return ch_now == ch_ && dwell_gen_now == dwell_gen_ && tune_gen_now == tune_gen_;
+  }
   bool armed_ = false;
   uint8_t ch_ = 0;
   uint16_t period_ = 0;
+  uint32_t clm_us_ = 0;
   uint32_t dwell_gen_ = 0;
   uint32_t tune_gen_ = 0;
 };

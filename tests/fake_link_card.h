@@ -127,6 +127,25 @@ struct FakeCard : maburgs::LinkCard {
     if (nhm_any_period) r.period = nhm_armed_period;
     return r;
   }
+  // CLM busy window (the fallback when arm_nhm_busy refuses): clm_ok arms
+  // it for the window asked; a read returns clm_read with that window, and
+  // an unarmed read is logged apart (devourer would sample NHM for it).
+  bool clm_ok = false;
+  uint32_t clm_armed_us = 0;
+  maburgs::ClmBusyRead clm_read;   // valid/pct/own_tx; window_us filled from the arm
+  uint32_t arm_clm_busy(uint32_t us) override {
+    calls.push_back("arm_clm " + std::to_string(us));
+    clm_armed_us = clm_ok ? us : 0;
+    return clm_armed_us;
+  }
+  maburgs::ClmBusyRead read_clm_busy() override {
+    if (clm_armed_us == 0) { calls.push_back("read_clm unarmed"); return {}; }
+    calls.push_back("read_clm");
+    maburgs::ClmBusyRead r = clm_read;
+    r.window_us = clm_armed_us;
+    clm_armed_us = 0;
+    return r;
+  }
   bool can_sweep() const override { return relay && sweep_ok; }
   bool start_sweep(const std::vector<uint8_t>& ch, uint8_t, uint8_t) override {
     if (!can_sweep() || !is_ready) return false;   // RemoteCard: running + owned_and_tuned

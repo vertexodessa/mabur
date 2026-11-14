@@ -354,14 +354,13 @@ bool ChannelScout::dwell(uint8_t ch, uint64_t round, bool burst, bool observe) {
   // Discard barrier: zero the delta counters and let the USB pipe drain.
   (void)radio_.read_energy(false);
   const uint16_t nhm_period = nhm_period_4us(cfg_.dwell_ms);   // clamps at ~262 ms
-  const bool nhm_armed = radio_.arm_nhm_busy(nhm_period);
+  const BusyArm busy_arm = arm_busy(radio_, nhm_period);
   const ScoutFrames f0 = radio_.frames();
   const uint64_t tx0 = tx_frames_.load(std::memory_order_acquire);
   const int64_t t0 = now_();
   sleep_(cfg_.dwell_ms);
-  const NhmBusyRead nb = nhm_armed ? radio_.read_nhm_busy() : NhmBusyRead{};
-  const std::optional<double> busy =
-      (nb.valid && nb.period == nhm_period) ? nhm_busy_pct(nb, cfg_.busy_dbm) : std::nullopt;
+  // Before read_energy(true): its NHM read would spoil a CLM window.
+  const std::optional<double> busy = read_busy(radio_, busy_arm, cfg_.busy_dbm);
   d.busy_valid = busy.has_value();
   d.busy_pct = busy.value_or(0.0);
   const ScoutEnergy e = radio_.read_energy(true);
