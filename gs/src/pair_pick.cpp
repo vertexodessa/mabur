@@ -56,6 +56,12 @@ uint8_t pair_proposal(const std::vector<RankEntry>& all, uint8_t current,
   return current;   // an exact busy tie, or neither side read: stay
 }
 
+bool relocation_earned(const std::vector<RankEntry>& all, uint8_t found, uint8_t want,
+                       int min_rounds, double margin_pct, double blocked_pct) {
+  if (want == found || !row_for(all, found, min_rounds)) return false;
+  return pair_proposal(all, found, {found, want}, min_rounds, margin_pct, blocked_pct) == want;
+}
+
 bool any_pair_ranked(const std::vector<RankEntry>& all, const std::vector<uint8_t>& set,
                      int min_rounds) {
   for (uint8_t c : set)

@@ -32,6 +32,17 @@ uint8_t pair_proposal(const std::vector<RankEntry>& all, uint8_t current,
                       const std::vector<uint8_t>& set, int min_rounds,
                       double margin_pct, double blocked_pct = 1e9);
 
+// Whether a link that formed on `found` should still move to `want`: only
+// when the pick rule above, with `found` as the current channel, picks
+// `want` -- found's own row ranked (a one-sided comparison never moves a
+// working link), want's ranked and out-ordering it by tier, by a busy
+// reading found lacks, or by margin_pct. No busy reading on either side, a
+// tie or a gain under the margin: the link stays where it formed. The want
+// it would leave was chosen against another channel (the start channel, or
+// the op of a pick made before the link), not against `found`.
+bool relocation_earned(const std::vector<RankEntry>& all, uint8_t found, uint8_t want,
+                       int min_rounds, double margin_pct, double blocked_pct = 1e9);
+
 // True when any pair in `set` is ranked (its primary's row at min_rounds).
 // The boot-pick freeze's "did the scan measure anything" test at
 // the derived receiver width 40.

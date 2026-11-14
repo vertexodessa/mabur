@@ -345,6 +345,17 @@ reach it.
   card too, via the mechanical retune), the scout parks there, and the
   proposal follows. `M all <op> <X> link_found`; stderr `maburgs channel:
   drone found on X (op Y): the link forms there`.
+- **Only a ranking that beats X keeps the move** (auto mode, X a member).
+  `want` was chosen against another channel (the start channel, or the op
+  of a pick made before the link), never against X, so it is weighed again
+  with X as the current channel (`relocation_earned`, `gs/src/pair_pick.h`):
+  X's row ranked, `want`'s ranked and out-ordering it by tier, by a busy
+  reading X lacks, or by `pick_margin_pct`. Otherwise `want` follows X and
+  nothing is relocated; stderr `maburgs channel: W does not out-rank X
+  where the link formed: staying`. A pin, a calibration's relocation and a
+  drone found outside the set keep their move. Bench 2026-11-14: a GS card
+  with no busy reading relocated a working link from quiet 144 onto the
+  start channel 36, by a pick that had no reading to compare.
 - **Then it is relocated.** `ChannelPlan::want()` is where the link
   *should* live: the pin in pinned mode, else the start channel, later the
   committed pick. While linked with `op ≠ want` (`relocate_due()`), the

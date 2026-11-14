@@ -38,9 +38,10 @@ struct ChannelPlanCfg {
 // -- the pin, else the start channel, later the committed pick. A DISC only
 // finds the drone: when the ack that opens a session was heard on a member
 // X != op, link_found() moves op_ to X for every card (the link forms
-// where the drone is), and the caller relocates it to want_ with an
-// ordinary hop order (relocate_due()). Every move of a linked link is a
-// hop order.
+// where the drone is). The caller then either sets want_ to X (auto mode,
+// when the ranking does not earn the move: ChannelCore::keep_found_link_)
+// or relocates the link to want_ with an ordinary hop order
+// (relocate_due()). Every move of a linked link is a hop order.
 class ChannelPlan {
  public:
   explicit ChannelPlan(ChannelPlanCfg cfg);

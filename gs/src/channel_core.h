@@ -642,6 +642,12 @@ class ChannelCore {
   // its busy reading in member_figs_ against the member it was dwelt on.
   void emit_dwell_(double now_ms, int card, const ScoutDwell& d);
   void freeze_pick_(double t, const char* why);
+  // The link formed on x != want: want follows x unless the scout's ranking
+  // earns the move (relocation_earned); pins, a calibration's relocation and
+  // a drone found outside the set keep their relocation.
+  void keep_found_link_(double now_ms, uint8_t x);
+  // The min_rounds the boot pick ranks with.
+  int pick_min_rounds_() const;
   void dispatch_hop_action_(const HopAction& act, bool relocate_tick, double now_ms);
   void apply_hop_action_(const HopAction& act, double now_ms);
   void step_scout_inputs_();

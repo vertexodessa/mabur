@@ -338,7 +338,8 @@ void ChannelCore::on_session_opened(const mabur::rc::DiscAck& ack, double now_ms
   // that OPENED the session -- our nonce, not key-mismatch flagged, so a
   // stranger's drone cannot drag the cards -- and only on the rx_channel of
   // this body. plan.link_found() moves op to it for every card; the
-  // relocation to plan.want(), if any, is an ordinary hop order (BootPick).
+  // relocation to plan.want(), if the ranking still earns it there
+  // (keep_found_link_), is an ordinary hop order (BootPick).
   const uint8_t x = rc_body_rx_ch_;
   if (ack.vrx_nonce == vrx_.rz_nonce() && !(ack.flags & mabur::rc::kAckKeyMismatch) &&
       x != 0 && x != plan_.op() && (plan_.member(x) || mabur::channel_5g(x)) &&
@@ -347,8 +348,36 @@ void ChannelCore::on_session_opened(const mabur::rc::DiscAck& ack, double now_ms
                     static_cast<unsigned>(x), static_cast<unsigned>(plan_.op()),
                     plan_.member(x) ? "" : " (outside the set)"));
     plan_.link_found(now_ms, x);
+    keep_found_link_(now_ms, x);
     vrx_.set_proposal(plan_.op());   // a DISC proposes the channel it is sent on: stay
   }
+}
+
+void ChannelCore::keep_found_link_(double now_ms, uint8_t x) {
+  const uint8_t want = plan_.want();
+  // link_found() refuses while a hop is in flight: op stayed, so want does.
+  if (plan_.op() != x) return;
+  // A pin and a calibration's pick are orders, not a ranking: relocated as
+  // ever. A drone found outside the set comes back into it.
+  if (want == x || pinned_ || !plan_.member(x) || cal_reloc_.s == CalReloc::Waiting ||
+      cal_reloc_.s == CalReloc::InFlight)
+    return;
+  if (scout_ && relocation_earned(scout_->ranking(), x, want, pick_min_rounds_(),
+                                  cfg_.radio.scan.pick_margin_pct,
+                                  cfg_.radio.scan.busy.blocked_pct))
+    return;
+  sink_.log(logf_("maburgs channel: %u does not out-rank %u where the link formed: staying",
+                  static_cast<unsigned>(want), static_cast<unsigned>(x)));
+  plan_.set_want(now_ms, x);
+}
+
+int ChannelCore::pick_min_rounds_() const {
+  // One card: a prelude cut short ranks on one round (scout_->mature()'s
+  // own effective min_rounds).
+  return (one_card_ && scout_ && scout_->prelude_done() &&
+          scout_->rounds() < static_cast<uint64_t>(cfg_.radio.scan.min_rounds))
+             ? 1
+             : cfg_.radio.scan.min_rounds;
 }
 
 std::vector<int> ChannelCore::disc_targets(int tx) const {
@@ -380,10 +409,7 @@ void ChannelCore::note_sent(bool sent_ok, bool is_rcf) {
 void ChannelCore::freeze_pick_(double t, const char* why) {
   if (!scout_) return;
   scout_->freeze();
-  const int mr = (one_card_ && scout_->prelude_done() &&
-                  scout_->rounds() < static_cast<uint64_t>(cfg_.radio.scan.min_rounds))
-                     ? 1
-                     : cfg_.radio.scan.min_rounds;
+  const int mr = pick_min_rounds_();
   const auto all = scout_->ranking();
   bool any = false;
   // The ranking's width is the scout's: its dwells ran at its card's width.

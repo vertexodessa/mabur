@@ -1102,6 +1102,53 @@ TEST(one_card_link_edge_freezes_one_card_linked) {
   CHECK(*g.core->snapshot(0).scan_pick == g.core->op());
 }
 
+// One card, the prelude done, then the drone found on 144 (the bench
+// 2026-11-14, fl-0001: the GS relocated a working link 144 -> 36 on a pick
+// with no busy reading). want is what the prelude chose against the start
+// channel, not against 144: it moves the link only when the ranking, with
+// 144 as current, earns it.
+static void one_card_found_on_144(Rig& g) {
+  for (int i = 0; i < 800 && !g.sink.has_line("one-card prelude ranking picks"); ++i) g.tick();
+  REQUIRE(g.sink.has_line("one-card prelude ranking picks"));
+  g.core->on_rc_body(144);
+  mabur::rc::DiscAck ack; ack.vrx_nonce = g.vrx->rz_nonce(); ack.vtx_nonce = 1; ack.agreed_channel = 144; ack.seq = 1;
+  g.core->on_session_opened(ack, static_cast<double>(g.clk.ms));
+  REQUIRE(g.core->op() == 144);
+  link_up(g);
+  g.vrx->test_set_move_edge();
+  for (int i = 0; i < 200 && !g.sink.has_line("relocate 144 -> "); ++i) g.tick(true);
+}
+
+TEST(a_link_found_on_a_channel_the_ranking_does_not_beat_stays_there) {
+  Rig g(1, 0);                         // no busy reading anywhere: want stays the start channel 40
+  one_card_found_on_144(g);
+  CHECK(g.sink.has_line("maburgs channel: 40 does not out-rank 144 where the link formed: staying"));
+  CHECK(!g.sink.has_line("relocate 144 -> "));
+  CHECK(g.core->op() == 144);
+  CHECK(g.sink.has_line("pick frozen on 144 (one-card linked)"));
+  // Read, but under the margin: 64 is what the prelude committed, 144 as quiet.
+  Rig h(1, 0);
+  h.cards[0]->nhm_busy_pct_on[40] = 100;
+  h.cards[0]->nhm_busy_pct_on[64] = 0;
+  h.cards[0]->nhm_busy_pct_on[112] = 100;
+  h.cards[0]->nhm_busy_pct_on[144] = 4;
+  one_card_found_on_144(h);
+  CHECK(h.sink.has_line("maburgs channel: 64 does not out-rank 144 where the link formed: staying"));
+  CHECK(!h.sink.has_line("relocate 144 -> "));
+  CHECK(h.core->op() == 144);
+}
+
+TEST(a_link_found_on_a_channel_the_ranking_beats_moves_to_the_pick) {
+  Rig g(1, 0);
+  g.cards[0]->nhm_busy_pct_on[40] = 100;
+  g.cards[0]->nhm_busy_pct_on[64] = 0;
+  g.cards[0]->nhm_busy_pct_on[112] = 100;
+  g.cards[0]->nhm_busy_pct_on[144] = 100;   // blocked: the prelude's 64 earns the move
+  one_card_found_on_144(g);
+  CHECK(!g.sink.has_line("where the link formed: staying"));
+  CHECK(g.sink.has_line("maburgs channel: relocate 144 -> 64 placed"));
+}
+
 TEST(inflight_dwell_feeds_ranker_and_dwell_stats) {
   Rig g(2, 0); freeze_auto(g);               // auto, frozen: scout idle after park, reactive layer live
   link_up(g);

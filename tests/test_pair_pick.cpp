@@ -52,4 +52,30 @@ TEST(config_order_breaks_full_ties) {
   CHECK(pair_ranking(all, {136, 144}, 3)[0] == 136);
 }
 
+// A link that formed on `found` moves to `want` only when the pick rule,
+// with found as the current channel, picks want.
+TEST(relocation_earned_only_when_the_pick_rule_moves_off_the_found_channel) {
+  const std::vector<RankEntry> clear = {{40, 0, 3, false, 0, true, 40}, {144, 0, 3, false, 0, true, 5}};
+  CHECK(relocation_earned(clear, 40, 144, 3, 10));          // 35 points quieter
+  CHECK(!relocation_earned(clear, 144, 40, 3, 10));         // the found channel is the quieter one
+  CHECK(!relocation_earned(clear, 144, 144, 3, 10));        // already there
+  const std::vector<RankEntry> close = {{40, 0, 3, false, 0, true, 5}, {144, 0, 3, false, 0, true, 0}};
+  CHECK(!relocation_earned(close, 144, 40, 3, 10));
+  CHECK(!relocation_earned(close, 40, 144, 3, 10));         // 5 points, under the margin
+  // No busy reading on either side: the frame score alone moves nothing.
+  const std::vector<RankEntry> blind = {{40, 0, 3, false, 0, false, 0}, {144, 500, 3, false, 0, false, 0}};
+  CHECK(!relocation_earned(blind, 144, 40, 3, 10));
+  // The found channel unmeasured (1 visit of 3): a one-sided comparison stays.
+  const std::vector<RankEntry> unmeasured = {{40, 0, 3, false, 0, true, 0}, {144, 0, 1, false, 0, true, 90}};
+  CHECK(!relocation_earned(unmeasured, 144, 40, 3, 10));
+  CHECK(relocation_earned(unmeasured, 144, 40, 1, 10));
+  // want unmeasured: nothing to move for.
+  const std::vector<RankEntry> want_unread = {{40, 0, 1, false, 0, true, 0}, {144, 0, 3, false, 0, true, 90}};
+  CHECK(!relocation_earned(want_unread, 144, 40, 3, 10));
+  // A blocked found channel loses to an unblocked want under the margin.
+  const std::vector<RankEntry> blocked = {{40, 0, 3, false, 0, true, 45}, {144, 0, 3, false, 0, true, 52}};
+  CHECK(relocation_earned(blocked, 144, 40, 3, 10, 50));
+  CHECK(!relocation_earned(blocked, 144, 40, 3, 10));       // not blocked: 7 points short
+}
+
 MTEST_MAIN
