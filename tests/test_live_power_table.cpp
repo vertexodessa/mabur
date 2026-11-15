@@ -334,7 +334,9 @@ TEST(calibration_restore_lands_pit_not_the_table) {
   const WidthPlans p = both();
   REQUIRE(r.t.replace(p, 20, true, false));
   r.t.set_pit(1);
+  r.dev.clear();
   r.t.begin_cal();
+  CHECK((r.dev.calls == Calls{"gate", "override -1"}));
   r.dev.clear();
   r.t.set_pit(1);
   r.t.set_pit(1);
@@ -370,6 +372,33 @@ TEST(set_pit_rewrites_after_calibration_let_go) {
   r.dev.clear();
   r.t.set_pit(1);
   CHECK((r.dev.calls == Calls{"gate", "override 1"}));
+}
+
+// The anchor read must see the chip's reference, not pit's index: the run's
+// first begin_cal clears a live pit override, gated; a second sweep of the
+// same run (cal_active still up) writes nothing more.
+TEST(begin_cal_lifts_live_pit_before_the_anchor_read) {
+  Rig r;
+  r.t.set_pit(1);
+  r.dev.clear();
+  r.t.begin_cal();
+  CHECK((r.dev.calls == Calls{"gate", "override -1"}));
+  CHECK(!r.dev.ungated_call);
+  r.dev.clear();
+  r.t.begin_cal();
+  CHECK(r.dev.calls.empty());
+}
+
+// No pit (or pit off): begin_cal touches no device, as before pit existed.
+TEST(begin_cal_without_pit_writes_nothing) {
+  Rig r;
+  r.t.begin_cal();
+  CHECK(r.dev.calls.empty());
+  r.cal_active = false;
+  r.t.set_pit(-1);
+  r.dev.clear();
+  r.t.begin_cal();
+  CHECK(r.dev.calls.empty());
 }
 
 MTEST_MAIN

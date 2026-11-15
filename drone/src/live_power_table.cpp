@@ -10,6 +10,15 @@ void LivePowerTable::begin_cal() {
   cal_active->store(true, std::memory_order_release);
   cal_epoch->fetch_add(1, std::memory_order_release);
   dirty_ = true;
+  // Pit's flat index off before the sweep reads its anchor: under a flat
+  // override the TXAGC reference registers read back the override itself
+  // (Jaguar3 0x18e8, Jaguar1 0xc30), so the run would place every cell
+  // around pit's index and calibrate the walls at pit power. Only the first
+  // sweep of a run finds pit live; the run's restore puts it back.
+  if (pit_live_ && pit_ >= 0) {
+    dev->gated([&] { dev->set_index_override(-1); });
+    std::fprintf(stderr, "maburd radio: pit power off for calibration\n");
+  }
   pit_live_ = false;  // the sweep programs its own override
 }
 
