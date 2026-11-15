@@ -3143,7 +3143,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     // fly ONE flat index across every rate until restart -- after an aborted
     // run, every rate below the anchor above its measured wall. This puts
     // the current rung's width's plan (or the chip's own table under
-    // power_mode "none") back and only then clears the override, in one
+    // power_mode "none") back and only then clears the override (to pit
+    // mode's index while that is on, LivePowerTable::set_pit), in one
     // tx_gate hold: while the override is live it masks the diffs, so the
     // right table is on the air the moment the override goes, with no window
     // of "no override, zeroed diffs". The config read stays outside the lock
@@ -3565,6 +3566,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         // while a parameter set's reprogram raced a width change.
         if (!cal_now_active && agent.current().generation != 0)
           power_table.follow(agent.current().ladder[1].bw);
+        // Pit mode follows the agent's low-power state; the table holds it
+        // while calibration owns the radio.
+        power_table.set_pit(agent.pit_index());
         devourer::ThermalStatus thermal = rtl_device->GetThermalStatus();
         devourer::TxStats txstats = rtl_device->GetTxStats();
         RadioHealth health;

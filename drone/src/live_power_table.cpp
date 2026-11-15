@@ -10,6 +10,7 @@ void LivePowerTable::begin_cal() {
   cal_active->store(true, std::memory_order_release);
   cal_epoch->fetch_add(1, std::memory_order_release);
   dirty_ = true;
+  pit_live_ = false;  // the sweep programs its own override
 }
 
 void LivePowerTable::follow(uint8_t bw) {
@@ -38,6 +39,21 @@ bool LivePowerTable::replace_unless_cal(WidthPlans p, uint8_t bw, bool* refused_
   // clean table and leave the old walls' diffs in the chip.
   dirty_ = true;
   return write_locked(bw, Write{});
+}
+
+void LivePowerTable::set_pit(int idx) {
+  std::lock_guard<std::mutex> l(mu_);
+  if (idx == pit_ && pit_live_) return;
+  pit_ = idx;
+  pit_live_ = false;
+  if (cal_active->load(std::memory_order_relaxed)) return;
+  if (!ready->load(std::memory_order_acquire)) return;
+  dev->gated([&] { dev->set_index_override(idx); });
+  pit_live_ = true;
+  if (idx >= 0)
+    std::fprintf(stderr, "maburd radio: pit power, flat TX index %d\n", idx);
+  else
+    std::fprintf(stderr, "maburd radio: pit power off, the power table flies\n");
 }
 
 void LivePowerTable::set_plans(WidthPlans p) {
@@ -70,8 +86,9 @@ bool LivePowerTable::write_locked(uint8_t bw, const Write& w) {
       // No plan: back to the untrimmed efuse table calibration zeroed.
       ok = dev->set_rate_diffs(std::nullopt);
     }
-    if (w.clear_override) dev->set_index_override(-1);
+    if (w.clear_override) dev->set_index_override(pit_);
   });
+  if (w.clear_override) pit_live_ = true;
   if (p) {
     // plan_for falls back to the other width's table when bw has none.
     const bool own = (bw == 40 ? plans_.p40 : plans_.p20).has_value();

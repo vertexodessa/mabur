@@ -1867,4 +1867,34 @@ TEST(fec_window_is_not_raised_any_more) {
   std::filesystem::remove(p);
 }
 
+
+TEST(low_power_pit_defaults_parse_and_refuse) {
+  {
+    auto path = write_temp_toml("");
+    auto cfg = load_config(path.string());
+    CHECK(cfg.low_power.pit == "pre_arm");
+    CHECK(cfg.low_power.pit_index == 1);
+    std::filesystem::remove(path);
+  }
+  {
+    auto path = write_temp_toml("[low_power]\npit = \"disarmed\"\npit_index = 12\n");
+    auto cfg = load_config(path.string());
+    CHECK(cfg.low_power.pit == "disarmed");
+    CHECK(cfg.low_power.pit_index == 12);
+    std::filesystem::remove(path);
+  }
+  {
+    auto path = write_temp_toml("[low_power]\npit = \"always\"\n");
+    std::string msg = what_of([&] { (void)load_config(path.string()); });
+    CHECK(msg.find("low_power.pit") != std::string::npos);
+    std::filesystem::remove(path);
+  }
+  {
+    auto path = write_temp_toml("[low_power]\npit_index = 128\n");
+    std::string msg = what_of([&] { (void)load_config(path.string()); });
+    CHECK(msg.find("low_power.pit_index") != std::string::npos);
+    std::filesystem::remove(path);
+  }
+}
+
 MTEST_MAIN
