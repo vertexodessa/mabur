@@ -371,7 +371,12 @@ void star6e_controls_note_frame(int is_idr)
 {
 	int changed;
 
+	const VencCfg *cfg = g_star6e_control_ctx.cfg;
+	uint64_t gop_us = cfg && cfg->gop_s > 0.0 ?
+		(uint64_t)(cfg->gop_s * 1e6) : 0;
+
 	sf_lock();
+	g_sf_guard.gop_us = gop_us;
 	changed = venc_sf_guard_frame(&g_sf_guard, sf_now_us(), is_idr);
 	pthread_mutex_unlock(&g_sf_mu);
 	if (changed)

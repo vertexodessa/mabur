@@ -279,13 +279,21 @@ their variance into jitter. Knobs, in order of proven usefulness:
   **The storm guard backs the floor up** (`VencSfGuard`, `venc_cfg.h`). The
   floor is sized on the scenes flown so far; a scene with more detail can
   still put an ordinary P frame above it at the QP rail. The encoder output
-  is watched for the wedge itself: a keyframe within 250 ms of the
-  previous one with no IDR request, bitrate write or fps change in the
-  300 ms before it (`gop_s = 0`, so no planned keyframe comes that close);
-  a request explains only the first keyframe after it, so the GS asking
-  again and rung writes during a storm do not hide the run.
+  is watched for its signature: a keyframe with no IDR request, bitrate
+  write or fps change in the 300 ms before it, that is neither the first
+  after bind nor on the periodic GOP (at least 9/10 of `gop_s` since the
+  last keyframe; `gop_s = 0` in the bundle, so none is). A request explains
+  only the first keyframe after it, so the GS asking again and rung writes
+  during a storm do not hide the run. The keyframe need not follow another
+  closely: with the threshold just under the scene's P frames the SDK
+  opens one GOP and misses again about a second later, which a close-pair
+  rule never counts (on the bench it let the lift decay back into the next
+  miss, a saw-tooth at 26 keyframes a minute).
   Each multiplies the threshold by 5/4, up to 2x; every 5 s without one
-  steps it back by 4/5 to the derived value. The cap keeps the lift from
+  steps it back by 4/5 towards the derived value, but not below the lift
+  the last storm keyframe raised it to until 60 s have passed without one
+  (stepping under the level the scene just needed only bought the next
+  miss: a keyframe every 9 s on the bench). The cap keeps the lift from
   becoming the airtime problem the ceiling exists to prevent: it only runs
   while the alternative is a keyframe on every frame, and at twice the
   floor (39.5 kB at 1728x816) one lifted P frame is still smaller than one
