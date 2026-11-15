@@ -1483,6 +1483,23 @@ TEST(radio_wide_tx_igi_floor_defaults_to_the_safe_value_and_parses) {
   std::filesystem::remove(bad);
 }
 
+TEST(radio_edcca_defaults_off_parses_and_refuses_a_non_bool) {
+  auto e = write_temp_toml("");
+  Config def = load_config(e.string());
+  std::filesystem::remove(e);
+  CHECK(def.radio.edcca == false);
+  auto on = write_temp_toml("[radio]\nedcca = true\n");
+  CHECK(load_config(on.string()).radio.edcca == true);
+  std::filesystem::remove(on);
+  auto off = write_temp_toml("[radio]\nedcca = false\n");
+  CHECK(load_config(off.string()).radio.edcca == false);
+  std::filesystem::remove(off);
+  auto bad = write_temp_toml("[radio]\nedcca = 1\n");
+  std::string msg = what_of([&] { (void)load_config(bad.string()); });
+  CHECK(msg.find("radio.edcca") != std::string::npos);
+  std::filesystem::remove(bad);
+}
+
 TEST(radio_channels_default_and_parse) {
   Config def = load_config(write_temp_toml("[venc]\nsensor_bin = \"x\"\n").string());
   REQUIRE(def.radio.channels.size() == 4);
