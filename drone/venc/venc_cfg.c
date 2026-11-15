@@ -112,6 +112,59 @@ uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps,
 	return (uint32_t)bytes;
 }
 
+void venc_sf_guard_init(VencSfGuard *g)
+{
+	memset(g, 0, sizeof(*g));
+	g->lift_pct = 100;
+}
+
+void venc_sf_guard_request(VencSfGuard *g, uint64_t now_us)
+{
+	g->last_req_us = now_us;
+}
+
+int venc_sf_guard_frame(VencSfGuard *g, uint64_t now_us, int is_idr)
+{
+	uint32_t before = g->lift_pct;
+
+	if (is_idr) {
+		int asked = g->last_req_us != 0 &&
+			now_us - g->last_req_us <= VENC_SF_REQ_US;
+		int close = g->last_idr_us != 0 &&
+			now_us - g->last_idr_us <= VENC_SF_STORM_US;
+
+		g->last_idr_us = now_us;
+		/* A request explains one keyframe, not every keyframe in its
+		 * window: in a storm on a weak link the GS asks again and the
+		 * ladder writes a new rate, and those must not hide the run. */
+		if (asked)
+			g->last_req_us = 0;
+		if (close && !asked) {
+			uint32_t up = g->lift_pct * 5u / 4u;
+
+			g->storms++;
+			g->lift_pct = up > VENC_SF_LIFT_MAX ? VENC_SF_LIFT_MAX : up;
+			g->calm_from_us = now_us;
+		}
+	}
+	if (g->lift_pct > 100 && now_us - g->calm_from_us >= VENC_SF_CALM_US) {
+		uint32_t down = g->lift_pct * 4u / 5u;
+
+		g->lift_pct = down < 100 ? 100 : down;
+		g->calm_from_us = now_us;
+	}
+	return g->lift_pct != before;
+}
+
+uint32_t venc_sf_guard_apply(const VencSfGuard *g, uint32_t bytes)
+{
+	uint64_t b = (uint64_t)bytes * g->lift_pct / 100ull;
+
+	if (b > 0xFFFFFFFFull / 8ull)
+		b = 0xFFFFFFFFull / 8ull;
+	return (uint32_t)b;
+}
+
 uint32_t venc_cfg_gop_frames(double gop_s, uint32_t fps)
 {
 	uint32_t gop_fps = fps ? fps : 30;
