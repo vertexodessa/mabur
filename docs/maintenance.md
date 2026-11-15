@@ -100,5 +100,11 @@ what carries the shell, so each step is driven by a maburd that runs:
 A GS starts an update only while the FC's heartbeat says disarmed: with no
 FC report it does not update at all.
 
+A GS also installs only a maburd that carries the drone's radio driver.
+maburd writes the card it brought up to `/tmp/mabur-radio` at start, one
+line `chip=<die> generation=<family>` (`chip=RTL8822E generation=jaguar3`),
+the same identity as its `maburd radio caps:` log line; the GS reads it in
+its probe and refuses a build without that chip.
+
 The script and the GS side live in Palianytsia
 (`release/drone/mabur-swap.sh`, `crates/runtime/src/drone_update.rs`).

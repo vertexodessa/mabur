@@ -80,11 +80,21 @@ export CPATH
 # (982 KB -> 1.37 MB) on a rootfs with ~3 MB free that holds two maburd
 # generations. After syncing ../devourer, diff its CMakeLists option() lines
 # against this list.
+#
+# MABUR_RADIOS picks the radio drivers, comma-separated from 8822e (RTL8812EU)
+# and jaguar1 (RTL8812AU/8811AU/8821AU); default 8822e. One maburd that a
+# ground station installs on every drone it meets must carry each drone's
+# card: 8822e,jaguar1.
+MABUR_RADIOS="${MABUR_RADIOS:-8822e}"
+on() { case ",$MABUR_RADIOS," in *",$1,"*) echo ON ;; *) echo OFF ;; esac; }
+for r in ${MABUR_RADIOS//,/ }; do
+  case $r in 8822e|jaguar1) ;; *) echo "error: MABUR_RADIOS: unknown radio '$r'" >&2; exit 1 ;; esac
+done
 cmake -S . -B build-arm-glibc -DCMAKE_TOOLCHAIN_FILE=cmake/arm-openipc.cmake \
   -DCMAKE_BUILD_TYPE=Release -DMABUR_BUILD_TESTS=OFF \
-  -DDEVOURER_JAGUAR1=OFF -DDEVOURER_8814=OFF -DDEVOURER_JAGUAR2_8822B=OFF \
+  -DDEVOURER_JAGUAR1="$(on jaguar1)" -DDEVOURER_8814=OFF -DDEVOURER_JAGUAR2_8822B=OFF \
   -DDEVOURER_JAGUAR2_8821C=OFF -DDEVOURER_JAGUAR3_8822C=OFF \
-  -DDEVOURER_JAGUAR3_8822E=ON -DDEVOURER_8733B=OFF \
+  -DDEVOURER_JAGUAR3_8822E="$(on 8822e)" -DDEVOURER_8733B=OFF \
   -DDEVOURER_KESTREL_8852B=OFF \
   -DDEVOURER_KESTREL_8852C=OFF -DDEVOURER_LOG_MAX_LEVEL=WARN
 # linkbench-tx is the drone-side half of the bench harness. It carries
