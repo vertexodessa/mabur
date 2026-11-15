@@ -19,8 +19,10 @@
 // written, except to put it back after calibration zeroed it.
 //
 // Pit mode (low_power.pit) is a flat TXAGC override on top of the table,
-// owned here too: production's override is pit_ (-1 = none), so the
-// calibration restore, which clears the sweep's override, lands pit_
+// owned here too: production's override is pit_ (-1 = none). begin_cal()
+// takes pit off before the sweep reads its anchor (the reference registers
+// read back a flat override, so the run would calibrate at pit power), and
+// the calibration restore, which clears the sweep's override, lands pit_
 // instead of always -1.
 
 #include <atomic>
