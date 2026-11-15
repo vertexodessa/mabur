@@ -195,7 +195,18 @@ resulting uplink loss:
    `link.rendezvous_ms` (30000) it re-rendezvouses. These are the only
    drone-side reactions to not hearing the GS.
 
-An op-changing RCF is sent once. A lost one costs one `feedback_ms`
+4. **Hardware-ACKed RCFs (opt-in).** With `link.ack_rcf` on the GS and
+   `radio.ack_rcf` on the drone, an RCF goes unicast: DA `56:42:75:05:d6:01`
+   (the drone's ACK responder), TA `56:42:75:05:d6:00` (the canonical SA
+   has its group bit set and cannot take an ACK), BSSID the canonical SA.
+   The GS card retransmits an unACKed one up to 2 times within the same
+   idle gap; DISCs stay broadcast and single-shot. The drone's RX path takes
+   RC frames whatever their address, so a GS with the key on still reaches
+   a drone with it off (each RCF is then retried to the limit). Each ACK
+   costs the drone about 44 us of air. Off by default.
+
+An op-changing RCF is sent once (with the ACK mode, once plus up to 2
+hardware retries). A lost one costs one `feedback_ms`
 (`docs/findings/2026-09-05-switch-loss.md`). The co-channel deferral that
 carrier sense exposes the downlink to is measured in flight by the drone's
 `drone.radio.rx` (`own`/`foreign`/`crcfail`) telemetry.

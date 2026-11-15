@@ -3791,6 +3791,15 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                    want_edcca_off ? " -- radio.edcca = false not applied" : "");
     }
   }
+  // Hardware-ACKed RCFs (radio.ack_rcf). The address is unicast and
+  // locally administered, and never the card's own MACID (devourer refuses
+  // an arm on that). Before device_ready: no send overlaps the writes.
+  if (cfg.radio.ack_rcf) {
+    static constexpr devourer::MacAddr kAckRcfAddr{{0x56, 0x42, 0x75, 0x05, 0xd6, 0x01}};
+    const bool armed = rtl_device->SetAckResponder(kAckRcfAddr);
+    std::fprintf(stderr, "maburd radio: RCF ACK responder %s\n",
+                 armed ? "armed on 56:42:75:05:d6:01" : "REFUSED by this backend -- RCFs go unacknowledged");
+  }
   if (cfg.radio.wide_tx_igi_floor > 0)
     std::fprintf(stderr, "maburd radio: wide-TX receive-gain floor 0x%02x from the first 40 MHz frame\n",
                  static_cast<unsigned>(cfg.radio.wide_tx_igi_floor));
