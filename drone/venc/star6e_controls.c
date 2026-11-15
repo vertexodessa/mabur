@@ -414,8 +414,12 @@ static int apply_superframe_p(uint32_t kbps)
 {
 	MI_VENC_SuperFrameCfg_t cfg = {0};
 	MI_VENC_SuperFrameCfg_t back = {0};
+	const VencCfg *vc = g_star6e_control_ctx.cfg;
 	uint32_t bytes = venc_superframe_p_bytes(g_superframe_p_pct, kbps,
-		g_star6e_control_ctx.delivered_fps);
+		g_star6e_control_ctx.delivered_fps,
+		g_star6e_control_ctx.frame_width,
+		g_star6e_control_ctx.frame_height,
+		vc ? vc->superframe_p_floor_kb : 0);
 	int rc_qp = 0;
 
 	cfg.eSuperFrmMode = bytes ? E_MI_VENC_SUPERFRM_REENCODE
@@ -436,10 +440,11 @@ static int apply_superframe_p(uint32_t kbps)
 	 * RcAgent re-assert, and an unchanged threshold is not news. */
 	if (!g_superframe_logged || bytes != g_superframe_logged_bytes ||
 	    rc_qp != 0) {
-		printf("> superframe P cap: %u%% of %u kbps @ %u fps = %u bytes "
+		printf("> superframe P cap: %u%% of %u kbps @ %u fps, floor %u kB/Mpx = %u bytes "
 			"(%s); readback mode=%d p_bits=%u rc_restage=%d\n",
 			(unsigned)g_superframe_p_pct, (unsigned)kbps,
 			(unsigned)g_star6e_control_ctx.delivered_fps,
+			vc ? (unsigned)vc->superframe_p_floor_kb : 0u,
 			(unsigned)bytes, bytes ? "reencode" : "off",
 			(int)back.eSuperFrmMode,
 			(unsigned)back.u32SuperPFrmBitsThr, rc_qp);
