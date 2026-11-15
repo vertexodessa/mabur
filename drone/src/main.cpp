@@ -1398,6 +1398,17 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // carrier sense on, the GS defers to the drone's bursts but the drone no
   // longer defers to a GS frame already on air: the GS's RcfSlotter is then
   // the only thing keeping uplink sends out of the bursts.
+  //
+  // With radio.cca on, "on" here is both gates, because bring-up only knows
+  // the all-or-nothing knob; once the radio is up the two are split (SetCcaGates, after
+  // join_radio_init below): primary CCA stays on, since the preamble gate is
+  // what removes the uplink collision above, and EDCCA follows radio.edcca
+  // (shipped off). EDCCA defers to raw in-band energy, which buys nothing
+  // against the GS's decodable uplink, and on Jaguar1 it is the gate that
+  // holds an injector back even on an idle channel. Turning BOTH off is the
+  // worst of the three: devourer measured a Jaguar1 injector under a
+  // co-channel flooder at 78 % delivered with only EDCCA off and 0.3 % with
+  // both off, because it stops waiting for a gap and collides instead.
   dev_cfg.tuning.disable_cca = !cfg.radio.cca;
   // devourer's wide-TX IGI floor: a DIG lower bound the driver turns on at
   // the first >= 40 MHz frame, because on a silent channel the receiver can
@@ -3737,17 +3748,39 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                  e.valid_nhm ? 1 : 0, e.valid_noise_floor ? 1 : 0);
   }
 
-  // Bring-up record of the MAC carrier-sense state requested via
-  // dev_cfg.tuning.disable_cca above. devourer logs its own carrier-sense line
-  // at info, and the production cross-build compiles info out
-  // (DEVOURER_LOG_MAX_LEVEL=WARN), so without this the deployed daemon leaves
-  // no trace of which way it was built. Records what maburd REQUESTED of
-  // devourer, not a register readback.
-  std::fprintf(stderr,
-               "maburd radio: MAC carrier sense (CCA+EDCCA) requested %s\n",
-               dev_cfg.tuning.disable_cca
-                   ? "OFF -- TX will not defer to co-channel traffic"
-                   : "ON -- TX defers to any decodable 802.11 preamble (chip default)");
+  // The carrier-sense split (see dev_cfg.tuning.disable_cca above): with
+  // radio.cca on, primary CCA on and EDCCA per radio.edcca. Here because the
+  // gate calls refuse before bring-up, and on the main thread before device_ready, so no sender's
+  // bulk-OUT can overlap the register writes. Once is enough: maburd never
+  // re-runs Init/InitWrite (the one bring-up that would reset the gates to
+  // the disable_cca knob), Jaguar3 re-asserts the pair in SetMonitorChannel,
+  // and the channel paths of Jaguar1 and Kestrel do not rewrite those bits.
+  // devourer logs its own line at info, which the production cross-build
+  // compiles out (DEVOURER_LOG_MAX_LEVEL=WARN), so this line is the deployed
+  // daemon's only record; the readback is the register, not the request.
+  // radio.cca = false keeps both gates off, as bring-up left them.
+  if (dev_cfg.tuning.disable_cca) {
+    std::fprintf(stderr,
+                 "maburd radio: MAC carrier sense (CCA+EDCCA) requested OFF -- TX will not "
+                 "defer to co-channel traffic\n");
+  } else {
+    const bool want_edcca_off = !cfg.radio.edcca;
+    bool rb_primary_off = false, rb_edcca_off = false;
+    if (rtl_device->SetCcaGates(/*primary_disabled=*/false, want_edcca_off)) {
+      char rb[48] = "unavailable";
+      if (rtl_device->GetCcaGates(rb_primary_off, rb_edcca_off))
+        std::snprintf(rb, sizeof rb, "primary=%s edcca=%s", rb_primary_off ? "OFF" : "on",
+                      rb_edcca_off ? "OFF" : "on");
+      std::fprintf(stderr,
+                   "maburd radio: MAC carrier sense: primary CCA on, EDCCA %s (readback %s)\n",
+                   want_edcca_off ? "off" : "on", rb);
+    } else {
+      std::fprintf(stderr,
+                   "maburd radio: MAC carrier sense: this backend has no per-gate control; "
+                   "both gates stay ON (primary CCA and EDCCA)%s\n",
+                   want_edcca_off ? " -- radio.edcca = false not applied" : "");
+    }
+  }
   if (cfg.radio.wide_tx_igi_floor > 0)
     std::fprintf(stderr, "maburd radio: wide-TX receive-gain floor 0x%02x from the first 40 MHz frame\n",
                  static_cast<unsigned>(cfg.radio.wide_tx_igi_floor));

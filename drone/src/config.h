@@ -87,6 +87,15 @@ struct RadioCfg {
   // turns the floor on at the first 40 MHz frame: a 20 MHz flight never
   // pays for it.
   int wide_tx_igi_floor = 0x35;
+  // The MAC's energy-detect gate (EDCCA): true = TX also defers to raw
+  // in-band energy, false = only the primary CCA gate is on, which defers to
+  // a decodable 802.11 preamble (the GS's RCF uplink, a neighbour). Primary
+  // CCA stays on because it is what keeps the drone off the GS's own uplink;
+  // EDCCA adds deferral to non-802.11 energy and to preambles too weak to
+  // decode, which costs downlink airtime without protecting the uplink; on
+  // a Jaguar1 card it is the gate that holds an injector back even on an
+  // idle channel (devourer measured ~95 % recovered with it alone cleared).
+  bool edcca = false;
 };
 
 struct FecCfg {
