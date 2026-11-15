@@ -96,7 +96,9 @@ the cards), logging to `/tmp/maburgs.log`; `S97maburplay` logs to
 ## Supported drone cards
 
 `tools/build-arm.sh` builds maburd for the **RTL8812EU** only (devourer
-rtl8822e) — the bench drone's card. The **RTL8812CU** (rtl8822c) is
+rtl8822e) — the bench drone's card — unless `MABUR_RADIOS` names more:
+`MABUR_RADIOS=8822e,jaguar1` adds the RTL8812AU family, the build a
+ground station carries to install on every drone it meets. The **RTL8812CU** (rtl8822c) is
 supported through a separate firmware image, the board
 `ssc338q_fpv_emax-wyvern-link-alpha` (`firmware/devices/`), whose `mabur.mk` builds devourer with
 the 8822C alone (`BR2_PACKAGE_MABUR_RADIO_8812CU`). One image, one chip: a

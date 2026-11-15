@@ -3752,6 +3752,16 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                  ac.tune_5g.valid ? ac.tune_5g.min_mhz : 0, ac.tune_5g.valid ? ac.tune_5g.max_mhz : 0,
                  ac.fastretune_ok ? 1 : 0, e.valid_fa ? 1 : 0, e.valid_igi ? 1 : 0,
                  e.valid_nhm ? 1 : 0, e.valid_noise_floor ? 1 : 0);
+    // The same identity in a file of its own, for a ground station about to
+    // install another maburd over the air: it must not push a build without
+    // this chip's driver (the RAM trial would fail and cut the video). The log
+    // line above is the fallback for older daemons, but the log's rotation can
+    // drop it.
+    if (FILE* f = std::fopen("/tmp/mabur-radio", "w")) {
+      std::fprintf(f, "chip=%s generation=%s\n", ac.chip_name ? ac.chip_name : "?",
+                   devourer::generation_name(ac.generation));
+      std::fclose(f);
+    }
   }
 
   // The carrier-sense split (see dev_cfg.tuning.disable_cca above): with
