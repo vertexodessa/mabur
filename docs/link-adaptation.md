@@ -741,6 +741,12 @@ observability only and does not gate the mode.
     until the next poll.
   - `"disarmed"`: whenever the mode is on, the downed aircraft included.
   - `"off"`: the mode never touches TX power.
+  - Calibration lifts pit: the first sweep of a run clears the override
+    (`LivePowerTable::begin_cal`) before the sweep reads its anchor. Under a
+    flat override the TXAGC reference registers read back the override
+    itself (Jaguar3 `0x18e8`, Jaguar1 `0xc30`), so a run started under pit
+    would place every cell around the pit index and calibrate the walls at
+    pit power.
   - The agent hands the index to `LivePowerTable::set_pit` on every tick.
     While calibration owns the radio the table only records it; the run's
     restore (`replace(..., clear_override=true)`) puts back the pit index
