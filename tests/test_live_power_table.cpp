@@ -298,4 +298,78 @@ TEST(cal_end_edge_catches_a_run_too_short_to_see) {
   CHECK(!poll());
 }
 
+
+// Pit mode: one gated write per change, nothing while it stands.
+TEST(set_pit_writes_the_flat_override_once_per_change) {
+  Rig r;
+  r.t.set_pit(1);
+  CHECK((r.dev.calls == Calls{"gate", "override 1"}));
+  r.dev.clear();
+  r.t.set_pit(1);
+  CHECK(r.dev.calls.empty());
+  r.t.set_pit(-1);
+  CHECK((r.dev.calls == Calls{"gate", "override -1"}));
+  r.dev.clear();
+  r.t.set_pit(-1);  // bring-up already cleared the override: nothing owed
+  CHECK(r.dev.calls.empty());
+  CHECK(!r.dev.ungated_call);
+}
+
+// Before InitWrite is done nothing reaches the chip; the agent's next call
+// after it writes.
+TEST(set_pit_waits_for_the_device) {
+  Rig r;
+  r.ready = false;
+  r.t.set_pit(1);
+  CHECK(r.dev.calls.empty());
+  r.ready = true;
+  r.t.set_pit(1);
+  CHECK((r.dev.calls == Calls{"gate", "override 1"}));
+}
+
+// Calibration owns the override while it runs: pit is held, and the run's
+// restore puts pit's index back instead of clearing to the table.
+TEST(calibration_restore_lands_pit_not_the_table) {
+  Rig r;
+  const WidthPlans p = both();
+  REQUIRE(r.t.replace(p, 20, true, false));
+  r.t.set_pit(1);
+  r.t.begin_cal();
+  r.dev.clear();
+  r.t.set_pit(1);
+  r.t.set_pit(1);
+  CHECK(r.dev.calls.empty());
+  r.cal_active = false;
+  REQUIRE(r.t.replace(p, 20, /*zero_offset=*/true, /*clear_override=*/true));
+  CHECK((r.dev.calls == Calls{"gate", diffs_of(p, 20), "offset 0", "override 1"}));
+  r.dev.clear();
+  r.t.set_pit(1);  // the restore made it live
+  CHECK(r.dev.calls.empty());
+}
+
+// The arm landing mid-run: pit goes off while calibration holds the radio,
+// and the restore clears to the table.
+TEST(pit_switched_off_during_calibration_restores_the_table) {
+  Rig r;
+  r.t.set_pit(1);
+  r.t.begin_cal();
+  r.t.set_pit(-1);
+  r.dev.clear();
+  r.cal_active = false;
+  REQUIRE(r.t.replace(WidthPlans{}, 20, true, true));
+  CHECK((r.dev.calls == Calls{"gate", "diffs efuse", "override -1"}));
+}
+
+// A run that ends without a restore yet: the agent's next set_pit writes
+// pit again, since the sweep may have left its own override.
+TEST(set_pit_rewrites_after_calibration_let_go) {
+  Rig r;
+  r.t.set_pit(1);
+  r.t.begin_cal();
+  r.cal_active = false;
+  r.dev.clear();
+  r.t.set_pit(1);
+  CHECK((r.dev.calls == Calls{"gate", "override 1"}));
+}
+
 MTEST_MAIN
