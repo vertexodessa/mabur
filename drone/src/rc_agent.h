@@ -364,11 +364,15 @@ class RcAgent {
   // ways -- a DISARMED report after an arm re-enters, so a downed-but-powered
   // aircraft falls back to the thin stream.
   bool low_power() const { return low_power_active_; }
-  // Latched by the first ARMED report; never clears. Observability only
-  // (the drone stats line's armed=): "has this process ever seen the FC
-  // armed", which separates a pre-flight drone from a downed one. NOT a
-  // policy input -- low_power() deliberately does not read it.
+  // Latched by the first ARMED report; never clears. "Has this process ever
+  // seen the FC armed", which separates a pre-flight drone from a downed one:
+  // the drone stats line's armed=, and pit mode "pre_arm". low_power()
+  // deliberately does not read it.
   bool armed_latched() const { return armed_latched_; }
+  // Pit mode's flat TXAGC index for now (low_power.pit / pit_index), -1 when
+  // the flown power stands: the mode off, pit "off", or "pre_arm" after the
+  // first ARMED report.
+  int pit_index() const;
   // The FC's last arm report (true = ARMED) when it is at most stale_ms old;
   // nullopt with no report that fresh (no FC link, MSP off). Any thread:
   // reads only the MSP thread's handoff word.

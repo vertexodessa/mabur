@@ -56,6 +56,13 @@ bool RcAgent::low_power_enabled() const {
   return knob_low_power_enable_.load(std::memory_order_relaxed);
 }
 
+int RcAgent::pit_index() const {
+  const auto& lp = cfg_.low_power;
+  if (!low_power_active_ || lp.pit == "off") return -1;
+  if (lp.pit == "pre_arm" && armed_latched_) return -1;
+  return lp.pit_index;
+}
+
 void RcAgent::note_pipeline_rebuilt() {
   rebuilt_pending_.store(true, std::memory_order_relaxed);
 }
