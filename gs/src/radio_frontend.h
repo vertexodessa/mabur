@@ -62,7 +62,11 @@ class RadioFrontend : public LinkCard {
     // mutexed push per CRC-good frame on the RX thread the GS has no
     // consumer for.
     bool usb_late_gauge = false;
+    // link.ack_rcf: RCFs go unicast to the drone's ACK responder and the
+    // card retransmits an unACKed one up to kAckRcfRetries times.
+    bool ack_rcf = false;
   };
+  static constexpr int kAckRcfRetries = 2;
 
   RadioFrontend(Cfg cfg, BodyQueue& out);
   ~RadioFrontend();                               // stop() if running

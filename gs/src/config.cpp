@@ -411,7 +411,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
                 "rung_stats", "fade", "probe",
                 "rcf_slot_hold_ms", "arrival_guard_syms",
                 "nack", "nack_residual",
-                "key_file", "key"});
+                "key_file", "key", "ack_rcf"});
     c.link.key_file = get_str(r, "key_file", "/etc/mabur.key", "link");
     // Read by presence: link.key is an optional web-overlay key,
     // not a tunable with a meaningful default, so its absence (the normal
@@ -421,6 +421,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     // list, right next to the real DEFAULT-key warning, diluting it.
     if (r.contains("key")) link_inline_key = get_str(r, "key", "", "link");
     c.link.feedback_ms = static_cast<int>(get_int(r, "feedback_ms", 100, 20, 5000, "link"));
+    c.link.ack_rcf = get_bool(r, "ack_rcf", false, "link");
     c.link.rcf_slot_hold_ms = static_cast<int>(get_int(r, "rcf_slot_hold_ms", 30, 0, 1000, "link"));
     c.link.arrival_guard_syms = static_cast<int>(get_int(r, "arrival_guard_syms", 192, 16, 512, "link"));
     c.link.beacon_keepalive_ms = static_cast<int>(get_int(r, "beacon_keepalive_ms", 1000, 100, 60000, "link"));

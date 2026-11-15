@@ -1483,6 +1483,20 @@ TEST(radio_wide_tx_igi_floor_defaults_to_the_safe_value_and_parses) {
   std::filesystem::remove(bad);
 }
 
+TEST(radio_ack_rcf_defaults_off_and_parses) {
+  auto e = write_temp_toml("");
+  Config def = load_config(e.string());
+  std::filesystem::remove(e);
+  CHECK(def.radio.ack_rcf == false);
+  auto on = write_temp_toml("[radio]\nack_rcf = true\n");
+  CHECK(load_config(on.string()).radio.ack_rcf == true);
+  std::filesystem::remove(on);
+  auto bad = write_temp_toml("[radio]\nack_rcf = 1\n");
+  std::string msg = what_of([&] { (void)load_config(bad.string()); });
+  CHECK(msg.find("radio.ack_rcf") != std::string::npos);
+  std::filesystem::remove(bad);
+}
+
 TEST(radio_edcca_defaults_off_parses_and_refuses_a_non_bool) {
   auto e = write_temp_toml("");
   Config def = load_config(e.string());

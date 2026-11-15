@@ -12,6 +12,7 @@
 #include "AdapterCaps.h"
 #include "RxPacket.h"
 #include "RxSense.h"
+#include "mabur/rc_proto.h"
 #include "UsbDeviceLock.h"
 #include "UsbOpen.h"
 #include "IRtlRadio.h"
@@ -96,6 +97,9 @@ bool RadioFrontend::open_and_start() {
   // 1 Hz A record uses with_nhm=false and must stay a handful of register
   // reads (bench-checked).
   dev_cfg.rx.abs_noise_floor = true;
+  // Only frames to a unicast address wait for an ACK, so the limit touches
+  // the hardware-ACKed RCFs alone; DISCs stay broadcast and single-shot.
+  if (cfg_.ack_rcf) dev_cfg.tx.retry_limit = kAckRcfRetries;
   // Debug passthrough: devourer's env->config translation lives in its
   // examples/, not the library, so these two register-dump levers (used to
   // diff a live card against the vendor kernel's end state) must be wired
@@ -401,7 +405,9 @@ bool RadioFrontend::send_control(const std::vector<uint8_t>& body) {
     tx_fail_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
-  const auto frame = build_control_frame(tx_seq_, body.data(), body.size());
+  const bool rcf = body.size() > 3 && body[3] == mabur::rc::T_RCF;
+  const auto frame = cfg_.ack_rcf && rcf ? build_control_frame_acked(tx_seq_, body.data(), body.size())
+                                         : build_control_frame(tx_seq_, body.data(), body.size());
   tx_seq_ = static_cast<uint16_t>((tx_seq_ + 1) & 0xFFF);
   const bool ok = device_->send_packet(frame.data(), frame.size());
   (ok ? tx_frames_ : tx_fail_).fetch_add(1, std::memory_order_relaxed);

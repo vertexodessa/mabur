@@ -163,6 +163,9 @@ struct FecCfg {
 /// Link-layer configuration: feedback rate, keepalive.
 struct LinkCfg {
   int feedback_ms = 100;
+  // Hardware-ACKed RCFs (RadioFrontend::Cfg::ack_rcf); the drone's
+  // radio.ack_rcf must be on too.
+  bool ack_rcf = false;
   int beacon_keepalive_ms = 1000;
   // RCF slotting (gs-uplink-self-blanking findings): while video
   // flows, hold each control frame until the next AU completes so the send
