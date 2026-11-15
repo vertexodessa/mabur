@@ -98,56 +98,94 @@ TEST(superframe_p_bytes_never_below_the_floor) {
 // asked for is the SDK giving up on a P frame at the QP rail. Each lifts the
 // threshold by 5/4 up to 2x (one lifted P frame stays under one rung-0 storm
 // keyframe); 5 s of calm steps it back by 4/5.
-TEST(superframe_storm_guard_lifts_on_unrequested_keyframe_runs) {
+TEST(superframe_storm_guard_lifts_on_unrequested_keyframes) {
   VencSfGuard g;
   venc_sf_guard_init(&g);
   const uint64_t f = 8333;  // one frame at 120 fps
   uint64_t t = 10000000;
-  // A requested keyframe and a second one right after a request: no lift.
-  venc_sf_guard_request(&g, t);
-  CHECK(venc_sf_guard_frame(&g, t + f, 1) == 0);
-  venc_sf_guard_request(&g, t + 2 * f);
-  CHECK(venc_sf_guard_frame(&g, t + 3 * f, 1) == 0);
+  // The keyframe at bind and a requested one: no lift.
+  CHECK(venc_sf_guard_frame(&g, t, 1) == 0);
+  venc_sf_guard_request(&g, t + 1000000);
+  CHECK(venc_sf_guard_frame(&g, t + 1000000 + f, 1) == 0);
   CHECK(g.lift_pct == 100);
-  // P frames, then the storm: one unrequested keyframe alone is not a
-  // storm, the second within 250 ms is.
+  // An unrequested keyframe alone, a second after the last one, is the SDK
+  // opening a GOP over an oversize P: it lifts.
   t += 2000000;
   CHECK(venc_sf_guard_frame(&g, t, 0) == 0);
-  CHECK(venc_sf_guard_frame(&g, t + f, 1) == 0);
-  CHECK(venc_sf_guard_frame(&g, t + 2 * f, 1) == 1);
+  CHECK(venc_sf_guard_frame(&g, t + f, 1) == 1);
   CHECK(g.lift_pct == 125);
-  // Two steps clear the largest P frame seen (1.33x the floor).
-  CHECK(venc_sf_guard_frame(&g, t + 3 * f, 1) == 1);
+  // A run lifts on each frame. Two steps clear the largest P frame seen
+  // (1.33x the floor).
+  CHECK(venc_sf_guard_frame(&g, t + 2 * f, 1) == 1);
   CHECK(g.lift_pct == 156);
-  CHECK(venc_sf_guard_frame(&g, t + 4 * f, 1) == 1);
+  CHECK(venc_sf_guard_frame(&g, t + 3 * f, 1) == 1);
   CHECK(g.lift_pct == 195);
-  CHECK(venc_sf_guard_frame(&g, t + 5 * f, 1) == 1);
+  CHECK(venc_sf_guard_frame(&g, t + 4 * f, 1) == 1);
   CHECK(g.lift_pct == 200);  // capped
-  CHECK(venc_sf_guard_frame(&g, t + 6 * f, 1) == 0);
+  CHECK(venc_sf_guard_frame(&g, t + 5 * f, 1) == 0);
   CHECK(g.storms == 5);
   // At the cap, 19740 B at 120@1728x816 becomes 39480 B: under one storm
   // keyframe at rung 0 (46-100 kB).
   CHECK(venc_sf_guard_apply(&g, 19740) == 39480);
   CHECK(venc_sf_guard_apply(&g, 0) == 0);
-  // Calm: P frames for 5 s step the lift down, once per 5 s.
-  uint64_t c = t + 6 * f;
-  CHECK(venc_sf_guard_frame(&g, c + 4999999, 0) == 0);
-  CHECK(venc_sf_guard_frame(&g, c + 5000000, 0) == 1);
+  // Calm: the lift the last storm keyframe needed holds for 60 s, then
+  // steps down by 4/5 once per 5 s.
+  uint64_t last = t + 5 * f;  // the last storm keyframe (at the cap)
+  CHECK(venc_sf_guard_frame(&g, last + 5000000, 0) == 0);
+  CHECK(venc_sf_guard_frame(&g, last + 59999999, 0) == 0);
+  CHECK(g.lift_pct == 200);
+  CHECK(venc_sf_guard_frame(&g, last + 60000000, 0) == 1);
   CHECK(g.lift_pct == 160);
-  CHECK(venc_sf_guard_frame(&g, c + 10000000, 0) == 1);
+  CHECK(venc_sf_guard_frame(&g, last + 64999999, 0) == 0);
+  CHECK(venc_sf_guard_frame(&g, last + 65000000, 0) == 1);
   CHECK(g.lift_pct == 128);
-  CHECK(venc_sf_guard_frame(&g, c + 15000000, 0) == 1);
+  uint64_t c = last + 55000000;
+  // A miss at 128 % raises it to 160 % and holds it there: stepping back
+  // under the level the scene just needed would only buy the next miss.
+  uint64_t m = last + 66000000;
+  CHECK(venc_sf_guard_frame(&g, m, 1) == 1);
+  CHECK(g.lift_pct == 160);
+  CHECK(venc_sf_guard_frame(&g, m + 30000000, 0) == 0);
+  CHECK(g.lift_pct == 160);
+  CHECK(venc_sf_guard_frame(&g, m + 60000000, 0) == 1);
+  CHECK(g.lift_pct == 128);
+  CHECK(venc_sf_guard_frame(&g, m + 65000000, 0) == 1);
   CHECK(g.lift_pct == 102);
-  CHECK(venc_sf_guard_frame(&g, c + 20000000, 0) == 1);
+  CHECK(venc_sf_guard_frame(&g, m + 70000000, 0) == 1);
   CHECK(g.lift_pct == 100);
-  CHECK(venc_sf_guard_frame(&g, c + 25000000, 0) == 0);
+  // Sparse overflow keyframes (bench: one about every 0.8 s with the
+  // threshold just under the scene's P frames) are no calm: the lift
+  // climbs and holds instead of decaying into the next miss.
+  uint64_t o = m + 80000000;
+  for (int i = 1; i <= 8; i++)
+    venc_sf_guard_frame(&g, o + (uint64_t)i * 800000, 1);
+  (void)c;
+  CHECK(g.lift_pct == 200);
+  for (int i = 9; i <= 15; i++)
+    CHECK(venc_sf_guard_frame(&g, o + (uint64_t)i * 800000, 1) == 0);
+  CHECK(g.lift_pct == 200);
   // A request in a storm explains one keyframe only: the GS asking again
   // or a rung write must not hide the rest of the run.
-  uint64_t s = c + 30000000;
-  CHECK(venc_sf_guard_frame(&g, s, 1) == 0);
-  venc_sf_guard_request(&g, s + f / 2);
-  CHECK(venc_sf_guard_frame(&g, s + f, 1) == 0);      // the asked one
-  CHECK(venc_sf_guard_frame(&g, s + 2 * f, 1) == 1);  // same window, unasked
+  VencSfGuard r;
+  venc_sf_guard_init(&r);
+  uint64_t s = 50000000;
+  CHECK(venc_sf_guard_frame(&r, s, 1) == 0);
+  venc_sf_guard_request(&r, s + f / 2);
+  CHECK(venc_sf_guard_frame(&r, s + f, 1) == 0);      // the asked one
+  CHECK(venc_sf_guard_frame(&r, s + 2 * f, 1) == 1);  // same window, unasked
+  CHECK(r.lift_pct == 125);
+}
+
+TEST(superframe_storm_guard_spares_the_periodic_gop_keyframe) {
+  VencSfGuard g;
+  venc_sf_guard_init(&g);
+  g.gop_us = 1000000;
+  uint64_t t = 10000000;
+  CHECK(venc_sf_guard_frame(&g, t, 1) == 0);            // bind
+  CHECK(venc_sf_guard_frame(&g, t + 1000000, 1) == 0);  // on the GOP
+  CHECK(venc_sf_guard_frame(&g, t + 1900000, 1) == 0);  // 9/10 of it: still the GOP
+  CHECK(g.lift_pct == 100);
+  CHECK(venc_sf_guard_frame(&g, t + 2400000, 1) == 1);  // mid-GOP: overflow
   CHECK(g.lift_pct == 125);
 }
 
