@@ -18,6 +18,9 @@ Each claim points at the code or at the bench record that measured it.
   `dev_cfg.tuning.disable_cca = false` in `drone/src/main.cpp` and
   `gs/src/radio_frontend.cpp`. Each radio defers to any decodable 802.11
   preamble (the other end's and anyone else's), then waits AIFS + backoff.
+  After bring-up the drone splits the gate: primary CCA (the preamble
+  defer) stays on and EDCCA (the raw-energy defer) follows `radio.edcca`,
+  shipped `false`; the GS keeps both on.
   The two ends only ever flip CCA together: CCA on the GS alone keys the
   drone up into an RCF already on air, which is worse than neither.
   Record: `docs/findings/2026-09-23-cca-on.md` (mechanism of the CCA-off
