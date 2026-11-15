@@ -275,6 +275,33 @@ their variance into jitter. Knobs, in order of proven usefulness:
   non-keyframe AUs per video mode at full power must stay under the floor
   times the megapixels, and no run of unrequested keyframes may appear
   with the P maximum sitting at the threshold (the wedge signature).
+
+  **The storm guard backs the floor up** (`VencSfGuard`, `venc_cfg.h`). The
+  floor is sized on the scenes flown so far; a scene with more detail can
+  still put an ordinary P frame above it at the QP rail. The encoder output
+  is watched for the wedge itself: a keyframe within 250 ms of the
+  previous one with no IDR request, bitrate write or fps change in the
+  300 ms before it (`gop_s = 0`, so no planned keyframe comes that close);
+  a request explains only the first keyframe after it, so the GS asking
+  again and rung writes during a storm do not hide the run.
+  Each multiplies the threshold by 5/4, up to 2x; every 5 s without one
+  steps it back by 4/5 to the derived value. The cap keeps the lift from
+  becoming the airtime problem the ceiling exists to prevent: it only runs
+  while the alternative is a keyframe on every frame, and at twice the
+  floor (39.5 kB at 1728x816) one lifted P frame is still smaller than one
+  rung-0 storm keyframe (46-100 kB). The encoder thread only
+  records frames; a 20 ms service thread (`venc-sfguard`) re-applies the
+  threshold under the verb lock, so a wedge ends within a few frames. The
+  `> superframe P cap:` line carries `storm lift N%` and the count of storm
+  keyframes.
+
+  **What the SDK does with a P frame that cannot fit is a mode, and only
+  REENCODE is measured.** REENCODE at the rail opens a new GOP (above).
+  `E_MI_VENC_SUPERFRM_DISCARD` is unmeasured on this SoC: it may drop the
+  frame and keep the reference chain (one repeated frame on the glass, no
+  keyframe), or break the chain. The debug verb `superframe_discard` (1 =
+  DISCARD, 0 = REENCODE, not a config key) switches it live for that
+  measurement.
 - **`u32MinQp` — no knob, do not rebuild.** It acts as a bit *ceiling*
   that collapses the rate past the scene's natural QP, and the quiet-scene
   QP-floor hypothesis it was added for was refuted

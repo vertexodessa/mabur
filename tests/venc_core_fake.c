@@ -112,6 +112,9 @@ int star6e_controls_set_max_ipprop(uint32_t prop) { (void)prop; return 0; }
 int star6e_controls_set_iqp_bound(int is_min, uint32_t qp) { (void)is_min; (void)qp; return 0; }
 int star6e_controls_set_superframe_p_pct(uint32_t pct) { (void)pct; return 0; }
 int star6e_controls_request_idr(void) { return 0; }
+int star6e_controls_superframe_pending(void) { return 0; }
+void star6e_controls_superframe_service(void) {}
+int star6e_controls_set_superframe_mode(int discard) { (void)discard; return 0; }
 
 int star6e_output_frame_ring_fill(const Star6eOutput *output, venc_frame_ring_fill_t *out)
 {

@@ -201,6 +201,56 @@ uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps,
 				 unsigned width, unsigned height,
 				 unsigned floor_kb);
 
+/* Keyframe-storm guard for the SuperFrame P ceiling.
+ *
+ * REENCODE squeezes an oversize P frame at a higher QP. When even the QP
+ * rail (48 on star6e) cannot bring it under the threshold, the SDK drops
+ * the P and opens a new GOP: a keyframe nobody asked for, larger still, so
+ * the next P misses too and every frame becomes a keyframe. The floor
+ * (superframe_p_floor_kb) keeps the threshold above an ordinary P frame,
+ * but a scene with more detail than the one it was sized on can still
+ * cross it.
+ *
+ * The guard reads the signature from the output: a keyframe within
+ * VENC_SF_STORM_US of the previous one with no IDR request in the
+ * VENC_SF_REQ_US before it (the bundle runs gop_s = 0, so no periodic
+ * keyframe can come that close). A request explains only the first
+ * keyframe after it. Each one multiplies the threshold by 5/4,
+ * up to VENC_SF_LIFT_MAX percent; after VENC_SF_CALM_US without one the
+ * lift steps back down by 4/5 towards 100.
+ *
+ * The cap is what keeps the guard from trading one airtime problem for
+ * another: the ceiling exists so a P frame fits the slow rungs, and a
+ * lifted ceiling lets bigger P frames through exactly there. But the lift
+ * only runs while the alternative is a keyframe on every frame, and a
+ * keyframe is 46-100 kB at rung 0 against a floor of 19.7 kB at 1728x816:
+ * at twice the floor one lifted P frame stays under one storm keyframe,
+ * and it comes once instead of every frame. The largest full-power P
+ * frame seen at 120@1728x816 was 1.33x the floor, inside two steps. Pure,
+ * host-tested (tests/test_venc_cfg.cpp). */
+#define VENC_SF_STORM_US 250000ull
+#define VENC_SF_REQ_US 300000ull
+#define VENC_SF_CALM_US 5000000ull
+#define VENC_SF_LIFT_MAX 200u
+
+typedef struct {
+	uint32_t lift_pct;	/* 100 = the threshold as derived */
+	uint64_t last_idr_us;	/* 0 = none yet */
+	uint64_t last_req_us;	/* 0 = none yet */
+	uint64_t calm_from_us;	/* when the last lift change happened */
+	uint32_t storms;	/* storm keyframes seen since init */
+} VencSfGuard;
+
+void venc_sf_guard_init(VencSfGuard *g);
+/* An IDR was requested at now_us (by the GS, a chain break, a scene cut). */
+void venc_sf_guard_request(VencSfGuard *g, uint64_t now_us);
+/* One encoded frame at now_us. Returns 1 when lift_pct changed (the
+ * threshold must be re-applied), else 0. */
+int venc_sf_guard_frame(VencSfGuard *g, uint64_t now_us, int is_idr);
+/* bytes * lift_pct / 100, saturating like venc_superframe_p_bytes; 0 stays
+ * 0 (ceiling off). */
+uint32_t venc_sf_guard_apply(const VencSfGuard *g, uint32_t bytes);
+
 /* GOP seconds -> frames at fps. gop_s <= 0 means VENC_GOP_NONE; fps 0 is
  * read as 30; never below one frame. */
 uint32_t venc_cfg_gop_frames(double gop_s, uint32_t fps);

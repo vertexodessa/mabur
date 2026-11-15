@@ -5,6 +5,9 @@
 #include "idr_rate_limit.h"
 #include "pipeline_common.h"
 
+#include "venc_cfg.h"
+
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -45,6 +48,61 @@ static int g_superframe_applied;
 static uint32_t g_superframe_logged_bytes;
 static int g_superframe_logged;
 static int apply_superframe_p(uint32_t kbps);
+
+/* Keyframe-storm guard (venc_cfg.h VencSfGuard). The encoder thread feeds
+ * it every frame and the verb threads every IDR they cause, so its state
+ * sits under its own lock; the encoder thread never touches the SDK for
+ * it. A lift change only raises g_sf_pending, and the service thread
+ * (venc_core) re-applies the threshold under the verb lock, where every
+ * other RC call lives. g_sf_mode is the SuperFrame mode the threshold is
+ * programmed with: REENCODE, or DISCARD through the debug verb (an
+ * unmeasured mode, there to be measured). */
+static pthread_mutex_t g_sf_mu;
+static pthread_once_t g_sf_mu_once = PTHREAD_ONCE_INIT;
+static VencSfGuard g_sf_guard = { .lift_pct = 100 };
+static int g_sf_pending;
+static MI_VENC_SuperFrmMode_e g_sf_mode = E_MI_VENC_SUPERFRM_REENCODE;
+
+static uint64_t sf_now_us(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)ts.tv_nsec / 1000ull;
+}
+
+/* Priority inheritance: the SCHED_FIFO encoder thread takes this lock on
+ * every frame, the other holders are normal-priority threads, and a holder
+ * preempted inside its few instructions must not stall the encoder. Made
+ * once, at the first use. */
+static void sf_mu_init(void)
+{
+	pthread_mutexattr_t a;
+
+	pthread_mutexattr_init(&a);
+	(void)pthread_mutexattr_setprotocol(&a, PTHREAD_PRIO_INHERIT);
+	pthread_mutex_init(&g_sf_mu, &a);
+	pthread_mutexattr_destroy(&a);
+}
+
+/* Every user of g_sf_mu goes through here: startup controls may run before
+ * the first bind. */
+static void sf_lock(void)
+{
+	pthread_once(&g_sf_mu_once, sf_mu_init);
+	pthread_mutex_lock(&g_sf_mu);
+}
+
+/* Something on our side is about to make the encoder emit a keyframe. The
+ * clock is read under the lock, so two writers can never store their
+ * stamps out of order (an earlier stamp after a later one wraps the
+ * guard's unsigned difference). */
+static void sf_note_request(void)
+{
+	sf_lock();
+	venc_sf_guard_request(&g_sf_guard, sf_now_us());
+	pthread_mutex_unlock(&g_sf_mu);
+}
 
 /* Last REQUESTED rate (pre-compensation, pre-rails): what apply_fps
  * re-applies so the >120 fps compensation and the SuperFrame P threshold
@@ -130,6 +188,11 @@ static int apply_bitrate(uint32_t kbps)
 
 	if (attr.rate.mode != I6_VENC_RATEMODE_H265CBR)
 		return -1;
+	/* A changed rate opens a GOP: that keyframe is not a storm keyframe.
+	 * The 5 s re-assert of an unchanged rate emits none, so it notes
+	 * nothing (noting it would hide a storm keyframe in its window). */
+	if (attr.rate.h265Cbr.bitrate != bits)
+		sf_note_request();
 	attr.rate.h265Cbr.bitrate = bits;
 
 	if (MI_VENC_SetChnAttr(g_star6e_control_ctx.venc_chn, &attr) != 0)
@@ -239,6 +302,9 @@ static int apply_fps(uint32_t fps)
 	if (MI_VENC_GetChnAttr(g_star6e_control_ctx.venc_chn, &attr) != 0 ||
 	    attr.rate.mode != I6_VENC_RATEMODE_H265CBR)
 		goto restore;
+	if (attr.rate.h265Cbr.fpsNum != rc_fps ||
+	    attr.rate.h265Cbr.fpsDen != 1 || attr.rate.h265Cbr.gop != gop)
+		sf_note_request();
 	attr.rate.h265Cbr.fpsNum = rc_fps;
 	attr.rate.h265Cbr.fpsDen = 1;
 	attr.rate.h265Cbr.gop = gop;
@@ -297,7 +363,42 @@ int star6e_controls_request_idr(void)
 
 	if (!idr_rate_limit_allow(chn))
 		return 0;  /* coalesced — not an error */
+	sf_note_request();
 	return MI_VENC_RequestIdr(chn, 1) == 0 ? 0 : -1;
+}
+
+void star6e_controls_note_frame(int is_idr)
+{
+	int changed;
+
+	sf_lock();
+	changed = venc_sf_guard_frame(&g_sf_guard, sf_now_us(), is_idr);
+	pthread_mutex_unlock(&g_sf_mu);
+	if (changed)
+		__atomic_store_n(&g_sf_pending, 1, __ATOMIC_RELEASE);
+}
+
+int star6e_controls_superframe_pending(void)
+{
+	return __atomic_load_n(&g_sf_pending, __ATOMIC_ACQUIRE);
+}
+
+void star6e_controls_superframe_service(void)
+{
+	if (!__atomic_exchange_n(&g_sf_pending, 0, __ATOMIC_ACQ_REL))
+		return;
+	if (g_superframe_last_kbps && (g_superframe_p_pct || g_superframe_applied))
+		(void)apply_superframe_p(g_superframe_last_kbps);
+}
+
+int star6e_controls_set_superframe_mode(int discard)
+{
+	g_sf_mode = discard ? E_MI_VENC_SUPERFRM_DISCARD
+			    : E_MI_VENC_SUPERFRM_REENCODE;
+	g_superframe_logged = 0;
+	if (g_superframe_last_kbps == 0)
+		return 0;
+	return apply_superframe_p(g_superframe_last_kbps);
 }
 
 /* Everything we have asked the rate controller for, kept because
@@ -420,10 +521,14 @@ static int apply_superframe_p(uint32_t kbps)
 		g_star6e_control_ctx.frame_width,
 		g_star6e_control_ctx.frame_height,
 		vc ? vc->superframe_p_floor_kb : 0);
+	VencSfGuard guard;
 	int rc_qp = 0;
 
-	cfg.eSuperFrmMode = bytes ? E_MI_VENC_SUPERFRM_REENCODE
-				  : E_MI_VENC_SUPERFRM_NONE;
+	sf_lock();
+	guard = g_sf_guard;
+	pthread_mutex_unlock(&g_sf_mu);
+	bytes = venc_sf_guard_apply(&guard, bytes);
+	cfg.eSuperFrmMode = bytes ? g_sf_mode : E_MI_VENC_SUPERFRM_NONE;
 	cfg.u32SuperIFrmBitsThr = 0xFFFFFFFFu;
 	cfg.u32SuperPFrmBitsThr = bytes ? bytes * 8u : 0xFFFFFFFFu;
 	cfg.u32SuperBFrmBitsThr = 0xFFFFFFFFu;
@@ -440,12 +545,17 @@ static int apply_superframe_p(uint32_t kbps)
 	 * RcAgent re-assert, and an unchanged threshold is not news. */
 	if (!g_superframe_logged || bytes != g_superframe_logged_bytes ||
 	    rc_qp != 0) {
-		printf("> superframe P cap: %u%% of %u kbps @ %u fps, floor %u kB/Mpx = %u bytes "
+		printf("> superframe P cap: %u%% of %u kbps @ %u fps, floor %u kB/Mpx, "
+			"storm lift %u%% (%u storm keyframes) = %u bytes "
 			"(%s); readback mode=%d p_bits=%u rc_restage=%d\n",
 			(unsigned)g_superframe_p_pct, (unsigned)kbps,
 			(unsigned)g_star6e_control_ctx.delivered_fps,
 			vc ? (unsigned)vc->superframe_p_floor_kb : 0u,
-			(unsigned)bytes, bytes ? "reencode" : "off",
+			(unsigned)guard.lift_pct, (unsigned)guard.storms,
+			(unsigned)bytes,
+			!bytes ? "off"
+			       : g_sf_mode == E_MI_VENC_SUPERFRM_DISCARD ? "discard"
+									 : "reencode",
 			(int)back.eSuperFrmMode,
 			(unsigned)back.u32SuperPFrmBitsThr, rc_qp);
 		fflush(stdout);
@@ -605,6 +715,13 @@ void star6e_controls_bind(Star6ePipelineState *pipeline, const VencCfg *cfg)
 	/* Seeded here, programmed by the first apply_bitrate (RcAgent's first
 	 * control tick) — the boot rate is a placeholder, not a budget. */
 	g_superframe_p_pct = cfg->superframe_p_pct;
+	sf_lock();
+	venc_sf_guard_init(&g_sf_guard);
+	pthread_mutex_unlock(&g_sf_mu);
+	/* DISCARD is a debug measurement: a rebuilt pipeline starts on the
+	 * measured mode. */
+	g_sf_mode = E_MI_VENC_SUPERFRM_REENCODE;
+	__atomic_store_n(&g_sf_pending, 0, __ATOMIC_RELEASE);
 	g_superframe_last_kbps = 0;
 	g_superframe_applied = 0;
 	g_superframe_logged = 0;

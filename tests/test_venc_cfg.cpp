@@ -94,6 +94,63 @@ TEST(superframe_p_bytes_never_below_the_floor) {
   CHECK(venc_superframe_p_bytes(0, 2700, 120, 1728, 816, 14) == 0);
 }
 
+// The storm guard: a keyframe within 250 ms of the previous one that nobody
+// asked for is the SDK giving up on a P frame at the QP rail. Each lifts the
+// threshold by 5/4 up to 2x (one lifted P frame stays under one rung-0 storm
+// keyframe); 5 s of calm steps it back by 4/5.
+TEST(superframe_storm_guard_lifts_on_unrequested_keyframe_runs) {
+  VencSfGuard g;
+  venc_sf_guard_init(&g);
+  const uint64_t f = 8333;  // one frame at 120 fps
+  uint64_t t = 10000000;
+  // A requested keyframe and a second one right after a request: no lift.
+  venc_sf_guard_request(&g, t);
+  CHECK(venc_sf_guard_frame(&g, t + f, 1) == 0);
+  venc_sf_guard_request(&g, t + 2 * f);
+  CHECK(venc_sf_guard_frame(&g, t + 3 * f, 1) == 0);
+  CHECK(g.lift_pct == 100);
+  // P frames, then the storm: one unrequested keyframe alone is not a
+  // storm, the second within 250 ms is.
+  t += 2000000;
+  CHECK(venc_sf_guard_frame(&g, t, 0) == 0);
+  CHECK(venc_sf_guard_frame(&g, t + f, 1) == 0);
+  CHECK(venc_sf_guard_frame(&g, t + 2 * f, 1) == 1);
+  CHECK(g.lift_pct == 125);
+  // Two steps clear the largest P frame seen (1.33x the floor).
+  CHECK(venc_sf_guard_frame(&g, t + 3 * f, 1) == 1);
+  CHECK(g.lift_pct == 156);
+  CHECK(venc_sf_guard_frame(&g, t + 4 * f, 1) == 1);
+  CHECK(g.lift_pct == 195);
+  CHECK(venc_sf_guard_frame(&g, t + 5 * f, 1) == 1);
+  CHECK(g.lift_pct == 200);  // capped
+  CHECK(venc_sf_guard_frame(&g, t + 6 * f, 1) == 0);
+  CHECK(g.storms == 5);
+  // At the cap, 19740 B at 120@1728x816 becomes 39480 B: under one storm
+  // keyframe at rung 0 (46-100 kB).
+  CHECK(venc_sf_guard_apply(&g, 19740) == 39480);
+  CHECK(venc_sf_guard_apply(&g, 0) == 0);
+  // Calm: P frames for 5 s step the lift down, once per 5 s.
+  uint64_t c = t + 6 * f;
+  CHECK(venc_sf_guard_frame(&g, c + 4999999, 0) == 0);
+  CHECK(venc_sf_guard_frame(&g, c + 5000000, 0) == 1);
+  CHECK(g.lift_pct == 160);
+  CHECK(venc_sf_guard_frame(&g, c + 10000000, 0) == 1);
+  CHECK(g.lift_pct == 128);
+  CHECK(venc_sf_guard_frame(&g, c + 15000000, 0) == 1);
+  CHECK(g.lift_pct == 102);
+  CHECK(venc_sf_guard_frame(&g, c + 20000000, 0) == 1);
+  CHECK(g.lift_pct == 100);
+  CHECK(venc_sf_guard_frame(&g, c + 25000000, 0) == 0);
+  // A request in a storm explains one keyframe only: the GS asking again
+  // or a rung write must not hide the rest of the run.
+  uint64_t s = c + 30000000;
+  CHECK(venc_sf_guard_frame(&g, s, 1) == 0);
+  venc_sf_guard_request(&g, s + f / 2);
+  CHECK(venc_sf_guard_frame(&g, s + f, 1) == 0);      // the asked one
+  CHECK(venc_sf_guard_frame(&g, s + 2 * f, 1) == 1);  // same window, unasked
+  CHECK(g.lift_pct == 125);
+}
+
 // The SSC338Q cuts slices in whole 64-px CTU rows
 // (docs/findings/2026-10-09-venc-slice.md):
 // 1080p = 17 rows, and only counts whose fixed row height reproduces the
