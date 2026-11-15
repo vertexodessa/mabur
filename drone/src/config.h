@@ -89,6 +89,14 @@ struct RadioCfg {
   // a Jaguar1 card it is the gate that holds an injector back even on an
   // idle channel (devourer measured ~95 % recovered with it alone cleared).
   bool edcca = false;
+  // Hardware-ACKed RCFs: arm the radio's ACK responder on the address a GS
+  // with the same setting sends its RCFs to (kAckRcfAddr in main.cpp), so
+  // the GS's card retransmits an RCF this receiver missed within the same
+  // idle gap instead of the order waiting a feedback period. The GS must
+  // be switched on together: an RCF to a responder that is not armed is
+  // retried to the limit and still arrives (the RX path takes RC frames
+  // whatever their address). Each ACK costs the drone about 44 us of air.
+  bool ack_rcf = false;
 };
 
 struct FecCfg {

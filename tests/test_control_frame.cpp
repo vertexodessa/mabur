@@ -37,6 +37,10 @@ TEST(sa_canonical_filters_by_source_address) {
   auto frame = maburgs::build_control_frame(7, body, sizeof(body));
   const size_t rt = frame.size() - 24 - sizeof(body);  // radiotap length
   CHECK(maburgs::sa_canonical(frame.data() + rt, frame.size() - rt));
+  // So must an ACKed RCF another GS card hears.
+  auto acked = maburgs::build_control_frame_acked(7, body, sizeof(body));
+  CHECK(acked.size() == frame.size());
+  CHECK(maburgs::sa_canonical(acked.data() + rt, acked.size() - rt));
 }
 
 TEST(dot11_body_offset_keys_on_frame_control) {

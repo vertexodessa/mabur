@@ -9,6 +9,10 @@ namespace maburgs {
 namespace {
 constexpr size_t kDot11 = 24;
 constexpr uint8_t kSa[6] = {0x57, 0x42, 0x75, 0x05, 0xd6, 0x00};
+// The hardware-ACKed RCF's addresses: the canonical SA has its group bit
+// set, and no station ACKs a group TA.
+constexpr uint8_t kAckRa[6] = {0x56, 0x42, 0x75, 0x05, 0xd6, 0x01};
+constexpr uint8_t kAckTa[6] = {0x56, 0x42, 0x75, 0x05, 0xd6, 0x00};
 
 const std::vector<uint8_t>& max_range_radiotap() {
   static const std::vector<uint8_t> rt = [] {
@@ -44,8 +48,19 @@ std::vector<uint8_t> build_control_frame(uint16_t seq, const uint8_t* body,
   return f;
 }
 
+std::vector<uint8_t> build_control_frame_acked(uint16_t seq, const uint8_t* body,
+                                               size_t len) {
+  std::vector<uint8_t> f = build_control_frame(seq, body, len);
+  uint8_t* d = f.data() + max_range_radiotap().size();
+  std::memcpy(d + 4, kAckRa, 6);
+  std::memcpy(d + 10, kAckTa, 6);
+  return f;
+}
+
 bool sa_canonical(const uint8_t* dot11, size_t len) {
-  return len >= 16 && std::memcmp(dot11 + 10, kSa, 6) == 0;
+  // An ACKed RCF from another GS card is ours too, not foreign air.
+  return len >= 16 &&
+         (std::memcmp(dot11 + 10, kSa, 6) == 0 || std::memcmp(dot11 + 10, kAckTa, 6) == 0);
 }
 
 size_t dot11_body_offset(const uint8_t* dot11, size_t len) {

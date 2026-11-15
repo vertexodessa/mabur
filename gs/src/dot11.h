@@ -16,6 +16,12 @@ namespace maburgs {
 // (A-MPDU), but the uplink RCF remains probe-req (unchanged by the wire change).
 std::vector<uint8_t> build_control_frame(uint16_t seq, const uint8_t* body, size_t len);
 
+// Pure: build_control_frame addressed for a hardware ACK (link.ack_rcf):
+// DA the drone's ACK responder 56:42:75:05:d6:01, TA the GS's unicast
+// 56:42:75:05:d6:00, BSSID the canonical SA. The canonical SA has its group
+// bit set, so no ACK can be addressed to it.
+std::vector<uint8_t> build_control_frame_acked(uint16_t seq, const uint8_t* body, size_t len);
+
 // Pure: true when the dot11 header's SA (bytes 10..15) is the canonical
 // mabur SA. Frames too short to carry an SA are not canonical.
 bool sa_canonical(const uint8_t* dot11, size_t len);

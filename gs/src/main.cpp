@@ -329,6 +329,7 @@ static int run_radio(const maburgs::Config& cfg, const std::string& cfg_path) {
     fc.channel = start_ch;
     fc.width_mhz = rx_width;
     fc.card_id = static_cast<uint8_t>(i);
+    fc.ack_rcf = cfg.link.ack_rcf;
     fronts.push_back(std::make_unique<maburgs::RadioFrontend>(fc, queue));
   }
   for (int k = 0; k < n_relays; ++k) {

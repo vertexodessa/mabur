@@ -124,7 +124,7 @@ void parse_radio(const Value& j, RadioCfg& r) {
                         "power_mode", "tx_threads", "rate_walls_rel_20",
                         "rate_walls_rel_40", "cal_flags_20", "cal_flags_40",
                         "legacy_wall_rel", "wall_margin_db", "ldpc",
-                        "wide_tx_igi_floor", "edcca"},
+                        "wide_tx_igi_floor", "edcca", "ack_rcf"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
@@ -163,6 +163,7 @@ void parse_radio(const Value& j, RadioCfg& r) {
   assign_if_present(j, "wall_margin_db", r.wall_margin_db, "radio");
   assign_if_present(j, "wide_tx_igi_floor", r.wide_tx_igi_floor, "radio");
   assign_if_present(j, "edcca", r.edcca, "radio");
+  assign_if_present(j, "ack_rcf", r.ack_rcf, "radio");
 
   if (r.tx_threads < 1 || r.tx_threads > 8)
     fail("radio.tx_threads", "must be in [1,8]");
