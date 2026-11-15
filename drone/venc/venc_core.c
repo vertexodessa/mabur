@@ -26,6 +26,7 @@
 
 #include <dirent.h>
 #include <pthread.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -253,6 +254,45 @@ static void *venc_encoder_thread(void *arg)
 	return NULL;
 }
 
+/* ── Storm guard service ─────────────────────────────────────────────── */
+
+/* Re-applies the SuperFrame threshold when the storm guard moved its lift
+ * (star6e_controls_note_frame, on the encoder thread, which must not make
+ * RC calls). Every 20 ms, so a storm is answered within a few frames;
+ * under the verb lock like every other RC call. One thread for the
+ * process: it does nothing while no core runs. */
+static void *venc_sf_service_thread(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		struct timespec ts = { 0, 20 * 1000 * 1000 };
+
+		nanosleep(&ts, NULL);
+		if (!star6e_controls_superframe_pending())
+			continue;
+		pthread_mutex_lock(&g_verb_lock);
+		if (venc_core_running())
+			star6e_controls_superframe_service();
+		pthread_mutex_unlock(&g_verb_lock);
+	}
+	return NULL;
+}
+
+static void venc_sf_service_start(void)
+{
+	pthread_t t;
+
+	if (pthread_create(&t, NULL, venc_sf_service_thread, NULL) != 0) {
+		fprintf(stderr, "WARN: venc storm-guard thread create failed; "
+			"the P ceiling lift applies at the next bitrate write\n");
+		return;
+	}
+	pthread_setname_np(t, "venc-sfguard");
+	pthread_detach(t);
+}
+
+static pthread_once_t g_sf_service_once = PTHREAD_ONCE_INIT;
+
 /* ── Lifecycle ────────────────────────────────────────────────────────── */
 
 int venc_core_preload(void)
@@ -327,6 +367,7 @@ int venc_core_start(const VencCfg *cfg, const VencCallbacks *cb)
 	}
 	g_enc_thread_started = 1;
 	pthread_setname_np(g_enc_thread, "venc-enc");
+	pthread_once(&g_sf_service_once, venc_sf_service_start);
 
 	printf("> venc_core: started (%ux%u@%u, ring %s)\n",
 		(unsigned)cfg->width, (unsigned)cfg->height,
@@ -347,8 +388,15 @@ void venc_core_stop(void)
 		return;
 
 	/* Close the verb window first: teardown destroys the channel and
-	 * dlcloses the MI libs out from under any late caller. */
+	 * dlcloses the MI libs out from under any late caller. A caller that
+	 * passed its running check before the store may still be inside an
+	 * SDK call under the verb lock (a verb, or the storm-guard service
+	 * thread, which nobody invokes and so can be mid-call at any stop):
+	 * taking the lock once waits it out. Nothing under the verb lock
+	 * waits on the encoder thread, so this cannot deadlock. */
 	__atomic_store_n(&g_started, 0, __ATOMIC_RELEASE);
+	pthread_mutex_lock(&g_verb_lock);
+	pthread_mutex_unlock(&g_verb_lock);
 
 	star6e_runtime_request_stop();
 	if (g_enc_thread_started) {
@@ -557,6 +605,18 @@ int venc_set_max_iqp(int qp)
 
 	pthread_mutex_lock(&g_verb_lock);
 	rc = star6e_controls_set_iqp_bound(0, (uint32_t)qp);
+	pthread_mutex_unlock(&g_verb_lock);
+	return rc == 0 ? 0 : -1;
+}
+
+int venc_set_superframe_discard(int on)
+{
+	int rc;
+
+	if (!venc_core_running() || (on != 0 && on != 1))
+		return -1;
+	pthread_mutex_lock(&g_verb_lock);
+	rc = star6e_controls_set_superframe_mode(on);
 	pthread_mutex_unlock(&g_verb_lock);
 	return rc == 0 ? 0 : -1;
 }

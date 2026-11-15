@@ -2,6 +2,7 @@
 #include "star6e_output.h"
 
 #include "venc_core_internal.h"
+#include "star6e_controls.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -218,6 +219,8 @@ static size_t star6e_output_send_frame_ring(Star6eOutput *output,
 			}
 		}
 	}
+
+	star6e_controls_note_frame(is_idr);
 
 	memset(&meta, 0, sizeof(meta));
 	meta.pts = (stream->count > 0 && stream->packet)

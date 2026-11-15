@@ -75,6 +75,17 @@ void star6e_controls_log_rc_readback(const char *when);
  *  channel — see MI_VENC_SuperFrameCfg_t in star6e.h). */
 int star6e_controls_set_superframe_p_pct(uint32_t pct);
 
+/** Keyframe-storm guard (venc_cfg.h VencSfGuard). note_frame: one encoded
+ *  frame, from the encoder thread; it touches no SDK call. pending: a lift
+ *  changed and the threshold awaits re-applying. service: re-apply it;
+ *  call under the verb lock. set_superframe_mode: 1 = DISCARD, 0 =
+ *  REENCODE (the default), for measuring what the SDK does with a P frame
+ *  that cannot fit. */
+void star6e_controls_note_frame(int is_idr);
+int star6e_controls_superframe_pending(void);
+void star6e_controls_superframe_service(void);
+int star6e_controls_set_superframe_mode(int discard);
+
 /** Explicit IDR request.  Goes through the shared per-channel 100 ms
  *  rate limiter (idr_rate_limit.h); a coalesced request returns 0, not an
  *  error.  This is the only place in venc_core that calls
