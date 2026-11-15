@@ -616,13 +616,21 @@ void parse_msp(const Value& j, MspCfg& m) {
 }
 
 void parse_low_power(const Value& j, LowPowerCfg& lp) {
-  check_known_keys(j, {"enable", "bitrate_kbps", "fps", "stale_ms"}, "low_power");
+  check_known_keys(j, {"enable", "bitrate_kbps", "fps", "stale_ms", "pit", "pit_index"},
+                   "low_power");
   assign_if_present(j, "enable", lp.enable, "low_power");
   assign_if_present(j, "bitrate_kbps", lp.bitrate_kbps, "low_power");
   assign_if_present(j, "fps", lp.fps, "low_power");
   assign_if_present(j, "stale_ms", lp.stale_ms, "low_power");
+  assign_if_present(j, "pit", lp.pit, "low_power");
+  assign_if_present(j, "pit_index", lp.pit_index, "low_power");
   if (lp.stale_ms < 100 || lp.stale_ms > 60000)
     fail("low_power.stale_ms", "must be in [100,60000]");
+  if (lp.pit != "off" && lp.pit != "pre_arm" && lp.pit != "disarmed")
+    fail("low_power.pit", "must be \"off\", \"pre_arm\" or \"disarmed\"");
+  // 127 is the Jaguar3 index ceiling; devourer clamps a larger one on the
+  // 63-step families.
+  if (lp.pit_index < 0 || lp.pit_index > 127) fail("low_power.pit_index", "must be in [0,127]");
 }
 
 void parse_record(const Value& j, RecordCfg& r) {

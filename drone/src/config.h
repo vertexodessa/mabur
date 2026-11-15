@@ -255,6 +255,13 @@ struct LowPowerCfg {
   int bitrate_kbps = 1000;
   int fps = 15;
   int stale_ms = 2000;
+  // Pit mode: the TX power while the mode is on, as a flat TXAGC index
+  // across all rates (pit_index). "off" keeps the flown power; "pre_arm"
+  // drops to pit_index only until this process sees the first ARMED report,
+  // so a downed aircraft and a spurious DISARMED in flight keep full power;
+  // "disarmed" drops whenever the mode is on, the downed aircraft included.
+  std::string pit = "pre_arm";
+  int pit_index = 1;
 };
 
 // VTX onboard SD recorder. enable creates the record VENC channel at boot;

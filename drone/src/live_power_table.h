@@ -17,6 +17,11 @@
 //
 // No plans (power_mode "none") means the chip's own efuse table: never
 // written, except to put it back after calibration zeroed it.
+//
+// Pit mode (low_power.pit) is a flat TXAGC override on top of the table,
+// owned here too: production's override is pit_ (-1 = none), so the
+// calibration restore, which clears the sweep's override, lands pit_
+// instead of always -1.
 
 #include <atomic>
 #include <cstdint>
@@ -60,9 +65,9 @@ struct LivePowerTable {
   // New plans, `bw`'s programmed at once (callers pass the rung's width as
   // they last saw it; a width change racing this is put right by the
   // agent's next follow(), which sees bw_ disagree). zero_offset also zeroes
-  // the global offset beside a plan; clear_override then clears the flat
-  // TXAGC override, in the same gate hold. False when the device refused
-  // the plan.
+  // the global offset beside a plan; clear_override then puts back
+  // production's flat TXAGC override (pit_, or none), in the same gate hold.
+  // False when the device refused the plan.
   bool replace(WidthPlans p, uint8_t bw, bool zero_offset, bool clear_override);
 
   // RADIO_WALL_MARGN's reprogram: replace(), refused under mu_ while
@@ -70,6 +75,11 @@ struct LivePowerTable {
   // between the caller's own cal_active check and here is never written
   // over. False on that refusal or when the device refused the plan.
   bool replace_unless_cal(WidthPlans p, uint8_t bw, bool* refused_cal);
+  // Agent thread: pit mode's flat TXAGC index, -1 = none (the table). Written
+  // at once unless calibration owns the radio or the device is not up yet;
+  // then held, and written by the next call that can (the agent calls this
+  // every tick) or by the calibration restore's clear_override.
+  void set_pit(int idx);
 
   // The A-MPDU mode shares this lock: the agent's production write runs
   // only while calibration does not own the radio, checked under mu_
@@ -110,6 +120,8 @@ struct LivePowerTable {
   WidthPlans plans_;    // empty when power_mode != "offset"
   uint8_t bw_ = 0;      // the rung width whose plan was last programmed, 0 = none yet
   bool dirty_ = false;  // the chip's diffs are not plan_for(plans_, bw_)
+  int pit_ = -1;          // production's flat override, -1 = none
+  bool pit_live_ = true;  // the chip carries pit_ (bring-up clears the override)
 };
 
 // The agent thread's calibration falling edge: the moment it must put back

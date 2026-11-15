@@ -732,6 +732,24 @@ observability only and does not gate the mode.
   - A spurious DISARMED (an MSP desync, a corrupt frame that passes the
     XOR checksum) throttles to the low-power rate in flight until the next
     poll corrects it. There is deliberately no debounce.
+- **Pit mode (TX power).** `low_power.pit` decides whether the mode also
+  drops TX power to `low_power.pit_index`, a flat TXAGC index across all
+  rates (`SetTxPowerIndexOverride`; 0.25 dB per step on Jaguar3, 0.5 dB on
+  Jaguar1, so the same index is not the same dBm on the two families).
+  - `"pre_arm"` (bundle and code default): only until this process sees
+    the first ARMED report (`RcAgent::pit_index()` reads `armed_latched()`).
+    A downed aircraft and a spurious DISARMED in flight therefore keep the
+    flown power, and the recovery stream stays audible. A maburd respawn in
+    flight boots unlatched, so a spurious DISARMED as its first reply pits
+    until the next poll.
+  - `"disarmed"`: whenever the mode is on, the downed aircraft included.
+  - `"off"`: the mode never touches TX power.
+  - The agent hands the index to `LivePowerTable::set_pit` on every tick.
+    While calibration owns the radio the table only records it; the run's
+    restore (`replace(..., clear_override=true)`) puts back the pit index
+    instead of clearing to the power table. The override is sticky across
+    channel moves (devourer `TxPower.h`).
+  - Fail open is unchanged: no fresh report means full power and no pit.
 - **What changes.** `run_bitrate_policy()` computes a target fps next to
   the target bitrate, and the bitrate is additionally `min()`-capped.
   - fps goes out first, then the bitrate. The bitrate write's `SetChnAttr`

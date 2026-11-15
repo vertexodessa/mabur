@@ -2445,6 +2445,7 @@ TEST(an_abort_only_frame_in_rendezvous_is_latched) {
   CHECK(!agent.take_auth_reject());
 }
 
+
 MTEST_MAIN
 
 // A restarted GS resets its RCF seq to ~1 while the drone's tracker holds
@@ -3816,4 +3817,64 @@ TEST(ldpc_change_reapplies_current_op_next_tick) {
   CHECK(act.applied.back().ladder[1].ldpc == false);
   CHECK(act.applied.back().ladder[1].mcs == prev.ladder[1].mcs);  // same rung
   CHECK(act.applied.back().generation == prev.generation);       // not a new op
+}
+
+// Pit mode "pre_arm" (the default): pit_index while disarmed before the first
+// arm; after it, a DISARMED report brings the thin stream back at full power
+// (the downed aircraft stays audible).
+TEST(pit_pre_arm_only_before_the_first_arm) {
+  Config cfg = make_cfg();
+  REQUIRE(cfg.low_power.pit == "pre_arm");
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  link_up_mcs5(agent, act, cfg);
+  CHECK(agent.pit_index() == -1);  // no arm report yet: fail open
+  agent.note_arm_state(false, 150);
+  agent.tick(200, RadioHealth{});
+  CHECK(agent.pit_index() == 1);
+  agent.note_arm_state(true, 300);
+  agent.tick(400, RadioHealth{});
+  CHECK(agent.pit_index() == -1);
+  agent.note_arm_state(false, 500);
+  agent.tick(600, RadioHealth{});
+  REQUIRE(agent.low_power());
+  CHECK(agent.pit_index() == -1);
+}
+
+// "disarmed": every DISARMED report, after an arm too, at the configured index.
+TEST(pit_disarmed_follows_every_disarm) {
+  Config cfg = make_cfg();
+  cfg.low_power.pit = "disarmed";
+  cfg.low_power.pit_index = 7;
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  link_up_mcs5(agent, act, cfg);
+  agent.note_arm_state(false, 150);
+  agent.tick(200, RadioHealth{});
+  CHECK(agent.pit_index() == 7);
+  agent.note_arm_state(true, 300);
+  agent.tick(400, RadioHealth{});
+  CHECK(agent.pit_index() == -1);
+  agent.note_arm_state(false, 500);
+  agent.tick(600, RadioHealth{});
+  CHECK(agent.pit_index() == 7);
+  // Silence after it is fail open: full power.
+  agent.tick(600 + cfg.low_power.stale_ms + 100, RadioHealth{});
+  CHECK(!agent.low_power());
+  CHECK(agent.pit_index() == -1);
+}
+
+// "off" and the mode switched off never touch the power.
+TEST(pit_off_or_low_power_off_keeps_the_flown_power) {
+  for (int variant = 0; variant < 2; ++variant) {
+    Config cfg = make_cfg();
+    if (variant == 0) cfg.low_power.pit = "off";
+    else cfg.low_power.enable = false;
+    MockActuator act;
+    RcAgent agent(cfg, act);
+    link_up_mcs5(agent, act, cfg);
+    agent.note_arm_state(false, 150);
+    agent.tick(200, RadioHealth{});
+    CHECK(agent.pit_index() == -1);
+  }
 }
