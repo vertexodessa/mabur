@@ -20,6 +20,9 @@ Each claim points at the code or at the bench record that measured it.
   `radio.cca` (`drone/src/config.h`, bundle `true`, read at start).
   A radio with carrier sense on defers to any decodable 802.11 preamble
   (the other end's and anyone else's), then waits AIFS + backoff.
+  With `radio.cca` on, the drone splits the gate after bring-up: primary
+  CCA (the preamble defer) stays on and EDCCA (the raw-energy defer)
+  follows `radio.edcca`, shipped `false`; the GS keeps both on.
   `radio.cca = false` makes the drone's transmitter stop deferring: other
   networks on the channel no longer hold the video back, and the drone no
   longer waits for a GS frame that is already on air, so the slotter

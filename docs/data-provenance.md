@@ -230,13 +230,25 @@ sideport of that era reports the CCA state — date the recording.
 
 To confirm the state on a running device, grep the daemon log for
 `carrier sense`: both daemons print a one-line bring-up record
-(`maburd radio: MAC carrier sense (CCA+EDCCA) requested …` /
+(`maburd radio: MAC carrier sense: primary CCA on, EDCCA off (readback …)` /
 `maburgs radio card N: …`, once per card bring-up — a recovered front-end
 reprints it, so more than one line per card on a multi-card GS is
 expected). devourer's own carrier-sense line is info-level and so is
 compiled out of the cross-builds' `DEVOURER_LOG_MAX_LEVEL=WARN` — its
-absence means nothing. Both lines record the state mabur *requested*, not
-a register readback.
+absence means nothing. The maburgs line records the state it *requested*;
+the maburd line carries the requested split and the 0x520 readback (older
+builds printed `MAC carrier sense (CCA+EDCCA) requested …`, a request only).
+
+## 2026-11-15 — drone EDCCA off
+
+`maburd` splits the gate after bring-up: primary CCA stays on (defers to a
+decodable preamble), EDCCA (defers to raw in-band energy) follows
+`radio.edcca`, shipped `false`. Before this both gates were on. Near
+non-802.11 energy or preambles too weak to decode, the drone now transmits
+where it used to wait, so its injection rate under that kind of
+interference is not comparable across the break; on a clean channel
+nothing changes. The GS still runs both gates. A backend without the split
+(Jaguar2) keeps both on and says so in the bring-up line.
 
 ## 2026-08-12 — TX power constant
 
