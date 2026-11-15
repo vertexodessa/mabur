@@ -41,6 +41,14 @@ typedef struct {
                               * star6e (fork probe); the RC
                               * re-plans UNDER the cap, so this is a quality
                               * lever too — bench before shipping non-zero. */
+  uint16_t superframe_p_floor_kb; /* venc.superframe_p_floor_kb: the ceiling
+                              * never goes below this many kB per megapixel
+                              * of the encoded frame (14 = 19.7 kB at
+                              * 1728x816, 68 kB at 2944x1656); 0 = no floor.
+                              * Below an ordinary P frame the SDK aborts
+                              * every P and opens a new GOP: a keyframe on
+                              * every frame at rung 0, in low_power and at
+                              * the MAX_RANGE floor (2026-11-15). */
   /* ── Error-resilience structure ───────────────────────────────────────
    * These six fields WERE one string, venc.resilience, naming a row in a
    * preset table that expanded into them (since deleted). They are
@@ -184,12 +192,14 @@ uint16_t venc_cfg_ctb64_rows(uint16_t height);
  * slices <= 1, slices > R, or the count is not achievable at this height. */
 uint8_t venc_cfg_slice_rows(uint16_t height, uint8_t slices);
 
-/* P-frame SuperFrame threshold in BYTES for a pct-of-budget cap at the
- * given programmed rate and frame rate: pct * (kbps*1024) / (fps*8*100).
+/* P-frame SuperFrame threshold in BYTES: pct * (kbps*1024) / (fps*8*100),
+ * raised to floor_kb kB (1000 B) per megapixel of a width x height frame.
  * kbps is the value handed to the encoder (decimal kbps, x1024 inside),
  * fps the rate the RC budgets at. 0 when pct or fps is 0 (= off). Pure,
  * host-tested (tests/test_venc_cfg.cpp). */
-uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps);
+uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps,
+				 unsigned width, unsigned height,
+				 unsigned floor_kb);
 
 /* GOP seconds -> frames at fps. gop_s <= 0 means VENC_GOP_NONE; fps 0 is
  * read as 30; never below one frame. */

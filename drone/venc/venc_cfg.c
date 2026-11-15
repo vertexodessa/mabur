@@ -33,6 +33,9 @@ void venc_cfg_defaults(VencCfg *cfg)
 	cfg->max_ipprop = 0; /* leave the firmware default (unbounded) */
 	cfg->min_iqp = 0;    /* leave the firmware I-QP floor */
 	cfg->superframe_p_pct = 0; /* no P-frame ceiling */
+	/* On even without the ceiling: a drone's kept config may carry
+	 * superframe_p_pct but no floor key, and must still be safe. */
+	cfg->superframe_p_floor_kb = 14;
 	/* Error-resilience structure. These reproduce, at 1080p60, exactly
 	 * what the deleted "rally" preset expanded to: its "fast" intra mode
 	 * targeted a 150 ms sweep: 9 frames, ceil(34 CTU rows / 9) = 4 rows
@@ -87,16 +90,26 @@ uint8_t venc_cfg_slice_rows(uint16_t height, uint8_t slices)
 	return (uint8_t)k;
 }
 
-uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps)
+uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps,
+				 unsigned width, unsigned height,
+				 unsigned floor_kb)
 {
-	uint64_t bits_per_frame;
+	uint64_t bits_per_frame, bytes, floor_bytes;
 
 	if (pct == 0 || fps == 0)
 		return 0;
 	/* Per-frame budget in bits = programmed bps / fps; programmed bps is
 	 * kbps * 1024 (star6e_controls.c apply_bitrate). */
 	bits_per_frame = ((uint64_t)kbps * 1024ull) / fps;
-	return (uint32_t)(bits_per_frame * pct / 100ull / 8ull);
+	bytes = bits_per_frame * pct / 100ull / 8ull;
+	/* The floor scales with the picture: an ordinary P frame at the QP
+	 * rail grows with the pixel count, the budget does not. */
+	floor_bytes = (uint64_t)floor_kb * width * height / 1000ull;
+	if (bytes < floor_bytes)
+		bytes = floor_bytes;
+	if (bytes > 0xFFFFFFFFull / 8ull)
+		bytes = 0xFFFFFFFFull / 8ull;
+	return (uint32_t)bytes;
 }
 
 uint32_t venc_cfg_gop_frames(double gop_s, uint32_t fps)
