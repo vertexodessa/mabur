@@ -211,13 +211,25 @@ uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps,
  * but a scene with more detail than the one it was sized on can still
  * cross it.
  *
- * The guard reads the signature from the output: a keyframe within
- * VENC_SF_STORM_US of the previous one with no IDR request in the
- * VENC_SF_REQ_US before it (the bundle runs gop_s = 0, so no periodic
- * keyframe can come that close). A request explains only the first
- * keyframe after it. Each one multiplies the threshold by 5/4,
+ * The guard reads the signature from the output: a keyframe nobody asked
+ * for. Asked means an IDR request in the VENC_SF_REQ_US before it (a
+ * request explains only the first keyframe after it); expected means the
+ * first keyframe after bind, or one that lands where the periodic GOP
+ * puts it (gop_us set and at least 9/10 of it since the previous
+ * keyframe; the bundle runs gop_s = 0, so none). Any other keyframe is the
+ * SDK opening a GOP over an oversize P. It need not come close to the
+ * previous one: with the threshold just under the scene's P frames the
+ * SDK opens one GOP, the keyframe resets the reference, and the next miss
+ * comes a second later (bench: 26 keyframes a minute, 4 of them closer
+ * than 250 ms, while a close-pair rule let the lift decay and climb in a
+ * saw-tooth). Each one multiplies the threshold by 5/4,
  * up to VENC_SF_LIFT_MAX percent; after VENC_SF_CALM_US without one the
- * lift steps back down by 4/5 towards 100.
+ * lift steps back down by 4/5, but not below the lift that the last storm
+ * keyframe raised it to: stepping under the level the scene was just seen
+ * to need only buys the next miss (bench: a keyframe every 9 s, each step
+ * back to 100 missing again). That hold is let go after VENC_SF_HOLD_US
+ * without a storm keyframe, so a scene that calms down gets the derived
+ * threshold back within a minute or so.
  *
  * The cap is what keeps the guard from trading one airtime problem for
  * another: the ceiling exists so a P frame fits the slow rungs, and a
@@ -228,9 +240,9 @@ uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps,
  * and it comes once instead of every frame. The largest full-power P
  * frame seen at 120@1728x816 was 1.33x the floor, inside two steps. Pure,
  * host-tested (tests/test_venc_cfg.cpp). */
-#define VENC_SF_STORM_US 250000ull
 #define VENC_SF_REQ_US 300000ull
 #define VENC_SF_CALM_US 5000000ull
+#define VENC_SF_HOLD_US 60000000ull
 #define VENC_SF_LIFT_MAX 200u
 
 typedef struct {
@@ -239,6 +251,9 @@ typedef struct {
 	uint64_t last_req_us;	/* 0 = none yet */
 	uint64_t calm_from_us;	/* when the last lift change happened */
 	uint32_t storms;	/* storm keyframes seen since init */
+	uint64_t gop_us;	/* periodic GOP length; 0 = none */
+	uint32_t hold_pct;	/* decay stops here: the last storm's lift */
+	uint64_t storm_us;	/* last storm keyframe; 0 = none */
 } VencSfGuard;
 
 void venc_sf_guard_init(VencSfGuard *g);

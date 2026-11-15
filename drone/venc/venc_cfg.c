@@ -116,6 +116,7 @@ void venc_sf_guard_init(VencSfGuard *g)
 {
 	memset(g, 0, sizeof(*g));
 	g->lift_pct = 100;
+	g->hold_pct = 100;
 }
 
 void venc_sf_guard_request(VencSfGuard *g, uint64_t now_us)
@@ -130,8 +131,9 @@ int venc_sf_guard_frame(VencSfGuard *g, uint64_t now_us, int is_idr)
 	if (is_idr) {
 		int asked = g->last_req_us != 0 &&
 			now_us - g->last_req_us <= VENC_SF_REQ_US;
-		int close = g->last_idr_us != 0 &&
-			now_us - g->last_idr_us <= VENC_SF_STORM_US;
+		int expected = g->last_idr_us == 0 ||
+			(g->gop_us != 0 &&
+			 now_us - g->last_idr_us >= g->gop_us / 10u * 9u);
 
 		g->last_idr_us = now_us;
 		/* A request explains one keyframe, not every keyframe in its
@@ -139,18 +141,23 @@ int venc_sf_guard_frame(VencSfGuard *g, uint64_t now_us, int is_idr)
 		 * ladder writes a new rate, and those must not hide the run. */
 		if (asked)
 			g->last_req_us = 0;
-		if (close && !asked) {
+		if (!asked && !expected) {
 			uint32_t up = g->lift_pct * 5u / 4u;
 
 			g->storms++;
 			g->lift_pct = up > VENC_SF_LIFT_MAX ? VENC_SF_LIFT_MAX : up;
+			g->hold_pct = g->lift_pct;
+			g->storm_us = now_us;
 			g->calm_from_us = now_us;
 		}
 	}
-	if (g->lift_pct > 100 && now_us - g->calm_from_us >= VENC_SF_CALM_US) {
+	if (g->hold_pct > 100 && now_us - g->storm_us >= VENC_SF_HOLD_US)
+		g->hold_pct = 100;
+	if (g->lift_pct > g->hold_pct &&
+	    now_us - g->calm_from_us >= VENC_SF_CALM_US) {
 		uint32_t down = g->lift_pct * 4u / 5u;
 
-		g->lift_pct = down < 100 ? 100 : down;
+		g->lift_pct = down < g->hold_pct ? g->hold_pct : down;
 		g->calm_from_us = now_us;
 	}
 	return g->lift_pct != before;
