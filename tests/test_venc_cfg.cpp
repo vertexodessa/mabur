@@ -64,12 +64,34 @@ TEST(intra_rows_spreads_the_picture_over_the_sweep) {
 // per frame; 200 % -> 68266 B. The venc-overshoot bench saw scene-cut
 // frames of 195 kB against that budget.
 TEST(superframe_p_bytes_follows_the_rung_budget) {
-  CHECK(venc_superframe_p_bytes(100, 16000, 60) == 34133);
-  CHECK(venc_superframe_p_bytes(200, 16000, 60) == 68266);
-  CHECK(venc_superframe_p_bytes(150, 3900, 60) == 12480);  // rung 1: 66560 bits/frame x 1.5 / 8
-  CHECK(venc_superframe_p_bytes(0, 16000, 60) == 0);       // off
-  CHECK(venc_superframe_p_bytes(200, 16000, 0) == 0);      // no fps yet
-  CHECK(venc_superframe_p_bytes(1000, 200000, 1) > 0);     // no overflow at the rails
+  CHECK(venc_superframe_p_bytes(100, 16000, 60, 0, 0, 0) == 34133);
+  CHECK(venc_superframe_p_bytes(200, 16000, 60, 0, 0, 0) == 68266);
+  CHECK(venc_superframe_p_bytes(150, 3900, 60, 0, 0, 0) == 12480);  // rung 1: 66560 bits/frame x 1.5 / 8
+  CHECK(venc_superframe_p_bytes(0, 16000, 60, 0, 0, 0) == 0);       // off
+  CHECK(venc_superframe_p_bytes(200, 16000, 0, 0, 0, 0) == 0);      // no fps yet
+  CHECK(venc_superframe_p_bytes(1000, 200000, 1, 0, 0, 0) > 0);     // no overflow at the rails
+  // The SDK takes the threshold in bits (x8 in u32): never past what fits.
+  CHECK(venc_superframe_p_bytes(1000, 4000000, 1, 0, 0, 0) == 0xFFFFFFFFu / 8u);
+}
+
+// The floor: below an ordinary P frame the SDK aborts every P and opens a
+// new GOP, so every frame is a keyframe (2026-11-15: fl-1980 rung 0, cap
+// 5760 B against 6-7 kB P frames; fl-1978 low_power, P max 8472 B at the
+// 8533 B cap, then 66-100 kB keyframes). 14 kB per megapixel is at least
+// the p99 of full-bitrate P frames in every mode flown that day.
+TEST(superframe_p_bytes_never_below_the_floor) {
+  // rung 0 at 120@1728x816: 2700 kbps -> 5760 B, floored to 19740 B.
+  CHECK(venc_superframe_p_bytes(200, 2700, 120, 0, 0, 0) == 5760);
+  CHECK(venc_superframe_p_bytes(200, 2700, 120, 1728, 816, 14) == 19740);
+  // low_power at 2944x1656: 1000 kbps at 30 fps -> 8533 B, floored to 68253 B.
+  CHECK(venc_superframe_p_bytes(200, 1000, 30, 0, 0, 0) == 8533);
+  CHECK(venc_superframe_p_bytes(200, 1000, 30, 2944, 1656, 14) == 68253);
+  // MAX_RANGE (boot, failsafe) at 120 fps: 1300 kbps -> 2773 B.
+  CHECK(venc_superframe_p_bytes(200, 1300, 120, 1728, 816, 14) == 19740);
+  // The top rung is untouched: 14000 kbps at 120 fps -> 29866 B > 19740 B.
+  CHECK(venc_superframe_p_bytes(200, 14000, 120, 1728, 816, 14) == 29866);
+  // The floor never switches a ceiling on.
+  CHECK(venc_superframe_p_bytes(0, 2700, 120, 1728, 816, 14) == 0);
 }
 
 // The SSC338Q cuts slices in whole 64-px CTU rows

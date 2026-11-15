@@ -305,7 +305,7 @@ void parse_wxh(const Value& j, const char* section, int& w, int& h) {
 void parse_venc(const Value& j, VencSectionCfg& v) {
   check_known_keys(j,
                     {"sensor_bin", "size", "fps", "binning", "gop_s", "qp_delta",
-                     "max_ipprop", "min_iqp", "superframe_p_pct",
+                     "max_ipprop", "min_iqp", "superframe_p_pct", "superframe_p_floor_kb",
                      "intra_refresh_frames", "intra_refresh_qp",
                      "ref_base", "ref_enhance", "ref_pred", "slices",
                      "mirror", "flip",
@@ -397,6 +397,15 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
     v.core.superframe_p_pct = static_cast<uint16_t>(p);
   } else {
     note_default("venc", "superframe_p_pct", to_text(kDef.core.superframe_p_pct));
+  }
+
+  if (j.contains("superframe_p_floor_kb")) {
+    int f = 0;
+    assign_if_present(j, "superframe_p_floor_kb", f, "venc");
+    if (f < 0 || f > 1000) fail("venc.superframe_p_floor_kb", "must be in [0,1000]");
+    v.core.superframe_p_floor_kb = static_cast<uint16_t>(f);
+  } else {
+    note_default("venc", "superframe_p_floor_kb", to_text(kDef.core.superframe_p_floor_kb));
   }
 
   // Error-resilience structure: five components, set individually (there is no

@@ -239,6 +239,42 @@ their variance into jitter. Knobs, in order of proven usefulness:
   stalls the channel for good. **The RC re-plans well under the cap**, so
   this is a quality lever as much as a bound; it targets scene-cut P
   frames at 2–6× budget (`docs/findings/2026-09-03-handover-venc-overshoot.md`).
+- **`venc.superframe_p_floor_kb`** (config, default **14** in code and
+  bundle) keeps that threshold at or above this many kB per megapixel of
+  the encoded frame. Without it the threshold falls under an ordinary P
+  frame wherever the budget is small: rung 0 (2700 kbps at 120 fps =
+  5760 B), low_power (1000 kbps at 30 fps = 8533 B) and the MAX_RANGE floor
+  at boot and failsafe entry (about 1300 kbps = 2773 B). There the SDK
+  aborts every P frame and opens a new GOP: a keyframe on every frame, a
+  full TxQueue, drop-oldest loss the GS books as RF loss, a lower rung and
+  a still smaller threshold (2026-11-15: 34 s with no complete frame).
+  14 is at least the p99 of full-bitrate P frames per megapixel in every
+  mode flown that day (19.7 kB at 1728x816, 29 kB at 1920x1080, 68 kB at
+  2944x1656); at the top rung of 120@1728x816 twice the budget (29.9 kB)
+  is above it, so the burst bound there is unchanged.
+
+  **Re-check the floor when** anything changes the size of an ordinary P
+  frame at the QP rail:
+  - the QP rails: `max_qp` (firmware clamps at 48), `qp_delta`, ROI QP;
+  - the frame rate the encoder runs at, above all `low_power.fps` (fewer
+    frames per second = more motion per P frame);
+  - intra refresh (`intra_refresh_frames`, `gop_s`): every P then carries
+    intra rows;
+  - the reference structure (`ref_base`, `ref_enhance`, `ref_pred`) and
+    `slices`;
+  - the sensor, lens, binning or a new `VENC_MODES` entry (detail per
+    pixel differs: binned modes ran 16-17 kB/Mpx at p99.9, native
+    2944x1656 10 kB/Mpx);
+  - the codec.
+
+  Re-check it the other way when `bitrate_max_kbps` or the fps changes:
+  once the floor exceeds twice the top-rung budget the burst bound is gone
+  there too (60@2944x1656 at 14000 kbps: 59.7 kB < 68 kB already).
+
+  How: from Palianytsia flight logs (`au.log`), the p99 of complete
+  non-keyframe AUs per video mode at full power must stay under the floor
+  times the megapixels, and no run of unrequested keyframes may appear
+  with the P maximum sitting at the threshold (the wedge signature).
 - **`u32MinQp` — no knob, do not rebuild.** It acts as a bit *ceiling*
   that collapses the rate past the scene's natural QP, and the quiet-scene
   QP-floor hypothesis it was added for was refuted
