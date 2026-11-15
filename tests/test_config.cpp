@@ -254,6 +254,7 @@ TEST(venc_absent_keys_fall_back_to_spec_defaults) {
   CHECK(c.venc.core.qp_delta == -4);
   CHECK(c.venc.core.max_ipprop == 0);
   CHECK(c.venc.core.superframe_p_pct == 0);
+  CHECK(c.venc.core.superframe_p_floor_kb == 14);  // on even for a kept config without the key
   // The decomposed resilience components (venc.resilience is deleted):
   // defaults reproduce the old "rally" preset at 1080p60 —
   // a 9-frame sweep (4 CTU rows/P at 1080p) at QP 36, 1:1 SVC-T with
@@ -483,6 +484,16 @@ TEST(venc_superframe_p_pct_parses) {
   std::filesystem::remove(path);
 }
 
+TEST(venc_superframe_p_floor_kb_parses) {
+  auto path = write_temp_toml(
+      "[venc]\n"
+      "sensor_bin = \"/etc/sensors/imx415_greg_fpvXIX_colortrans.bin\"\n"
+      "superframe_p_floor_kb = 0\n");
+  Config c = load_config(path.string());
+  CHECK(c.venc.core.superframe_p_floor_kb == 0);
+  std::filesystem::remove(path);
+}
+
 // venc.min_qp was a one-day bench knob and is DELETED: the
 // bench refuted the QP-floor hypothesis it existed for, and upstream
 // characterised u32MinQp as a bit ceiling that collapses the rate. The
@@ -540,6 +551,8 @@ TEST(venc_range_checks) {
            Case{"[venc]\nmin_iqp = 52\n", "venc.min_iqp"},
            Case{"[venc]\nsuperframe_p_pct = 50\n", "venc.superframe_p_pct"},
            Case{"[venc]\nsuperframe_p_pct = 1001\n", "venc.superframe_p_pct"},
+           Case{"[venc]\nsuperframe_p_floor_kb = -1\n", "venc.superframe_p_floor_kb"},
+           Case{"[venc]\nsuperframe_p_floor_kb = 1001\n", "venc.superframe_p_floor_kb"},
            Case{"[venc]\nsnapshot_quality = 0\n", "venc.snapshot_quality"},
            Case{"[venc]\nsnapshot_quality = 101\n", "venc.snapshot_quality"},
            Case{"[venc]\ndebug_port = 1023\n", "venc.debug_port"},
