@@ -117,12 +117,7 @@ So a body with one surviving block is still attributed rather than booked
 as `bpb` lost blocks. An FCS-failed probe PPDU still reaches `ProbeTrack`:
 `parse_probe_body` salvages the CRC-clean sub-blocks exactly as the video
 decoder does. Gating the probe sink on `crc_ok` would book every FCS-failing
-PPDU as a full `bpb`-block loss and bias the gate toward Lossy. For the
-same reason the aggregator's clean-stream rule (mabur-ground
-`docs/observability.md`, corrupt-frame salvage), which routes an FCS-failed
-video body only to a stream heard FCS-good within 500 ms, does not apply to
-the probe: a probe a rung above the link can go that long without one clean
-body while video is clean.
+PPDU as a full `bpb`-block loss and bias the gate toward Lossy.
 
 **Scoring rule: union across cards, AU count for expected, never seq gaps.**
 `ProbeTrack` ([`gs/src/probe_track.h`](https://github.com/gilankpam/mabur-ground/blob/master/gs/src/probe_track.h), `on_au(sid, fid)`) books one
